@@ -1,7 +1,7 @@
 import { Stethoscope, X } from 'lucide-react';
 import { useCallback, useState } from 'react';
-import { run as runDiagnostic } from '@/actions/App/Http/Controllers/DiagnosticsController';
 import { Button } from '@/components/ui/button';
+import { run as runDiagnostic } from '@/actions/App/Http/Controllers/DiagnosticsController';
 
 type CheckResult = { ok: boolean; output: string } | null;
 type CheckKey =

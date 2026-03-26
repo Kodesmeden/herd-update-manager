@@ -10,6 +10,12 @@ import {
     X,
 } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { Badge } from '@/components/ui/badge';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import SimpleTooltip from '@/components/ui/simple-tooltip';
+import { Skeleton } from '@/components/ui/skeleton';
+import { getCsrfToken } from '@/lib/utils';
 import {
     branches as fetchBranches,
     createBranch,
@@ -17,12 +23,6 @@ import {
     mergePr,
     switchBranch,
 } from '@/actions/App/Http/Controllers/GitController';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import SimpleTooltip from '@/components/ui/simple-tooltip';
-import { Skeleton } from '@/components/ui/skeleton';
-import { getCsrfToken } from '@/lib/utils';
 
 export interface GitInfoData {
     is_git_repo: boolean;

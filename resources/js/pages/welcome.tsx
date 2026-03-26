@@ -9,13 +9,6 @@ import {
     Upload,
 } from 'lucide-react';
 import { useState } from 'react';
-import {
-    fetchAll,
-    push,
-    pushAll,
-    update,
-    updateAll,
-} from '@/actions/App/Http/Controllers/InstallationController';
 import DiagnosticsPanel from '@/components/diagnostics-panel';
 import InstallationCard from '@/components/installation-card';
 import type { Installation } from '@/components/installation-card';
@@ -31,6 +24,13 @@ import { Input } from '@/components/ui/input';
 import SimpleTooltip from '@/components/ui/simple-tooltip';
 import { useAppearance } from '@/hooks/use-appearance';
 import { getCsrfToken } from '@/lib/utils';
+import {
+    fetchAll,
+    push,
+    pushAll,
+    update,
+    updateAll,
+} from '@/actions/App/Http/Controllers/InstallationController';
 
 interface Props {
     installations: Installation[];

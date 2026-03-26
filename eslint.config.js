@@ -81,6 +81,13 @@ export default [
                         'sibling',
                         'index',
                     ],
+                    pathGroups: [
+                        {
+                            pattern: '@/actions/**',
+                            group: 'internal',
+                            position: 'after',
+                        },
+                    ],
                     alphabetize: {
                         order: 'asc',
                         caseInsensitive: true,

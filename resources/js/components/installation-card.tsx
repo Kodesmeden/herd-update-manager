@@ -1,18 +1,18 @@
 import { router } from '@inertiajs/react';
 import { Eye, EyeOff, FileText, RefreshCw, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { show as fetchMeta } from '@/actions/App/Http/Controllers/AppInfoController';
-import {
-    dismiss,
-    hide,
-    unhide,
-} from '@/actions/App/Http/Controllers/InstallationController';
 import AppInfoBadge from '@/components/app-info-badge';
 import GitPanel from '@/components/git-panel';
 import type { GitInfoData } from '@/components/git-panel';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import SimpleTooltip from '@/components/ui/simple-tooltip';
+import { show as fetchMeta } from '@/actions/App/Http/Controllers/AppInfoController';
+import {
+    dismiss,
+    hide,
+    unhide,
+} from '@/actions/App/Http/Controllers/InstallationController';
 
 export interface Installation {
     id: number;
