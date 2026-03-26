@@ -14,17 +14,19 @@ use Illuminate\Support\Facades\Process;
 class UpdateInstallation extends Command
 {
     /**
-     * @return array<int, array{command: string, label: string, progress: int}>
+     * @return array<int, array{command: string, label: string, progress: int, env?: array<string, string>}>
      */
     private function steps(string $path): array
     {
+        $artisan = $path.DIRECTORY_SEPARATOR.'artisan';
+
         return [
             ['command' => 'composer update', 'label' => 'Composer update', 'progress' => 15],
-            ['command' => 'PUPPETEER_SKIP_DOWNLOAD=true npm update', 'label' => 'NPM update', 'progress' => 40],
+            ['command' => 'npm update', 'label' => 'NPM update', 'progress' => 40, 'env' => ['PUPPETEER_SKIP_DOWNLOAD' => 'true']],
             ['command' => 'npm run build', 'label' => 'Build assets', 'progress' => 70],
-            ['command' => "php {$path}/artisan view:clear", 'label' => 'Clear views', 'progress' => 85],
-            ['command' => "php {$path}/artisan config:clear", 'label' => 'Clear config', 'progress' => 92],
-            ['command' => "php {$path}/artisan route:clear", 'label' => 'Clear routes', 'progress' => 100],
+            ['command' => "php {$artisan} view:clear", 'label' => 'Clear views', 'progress' => 85],
+            ['command' => "php {$artisan} config:clear", 'label' => 'Clear config', 'progress' => 92],
+            ['command' => "php {$artisan} route:clear", 'label' => 'Clear routes', 'progress' => 100],
         ];
     }
 
@@ -51,7 +53,7 @@ class UpdateInstallation extends Command
             ]);
 
             $result = Process::path($installation->path)
-                ->env($env)
+                ->env(array_merge($env, $step['env'] ?? []))
                 ->timeout(600)
                 ->run($step['command']);
 

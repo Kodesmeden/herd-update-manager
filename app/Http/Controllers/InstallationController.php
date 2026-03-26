@@ -54,7 +54,7 @@ class InstallationController extends Controller
 
         foreach ($installations as $installation) {
             $isGit = Process::path($installation->path)->env($env)->timeout(5)
-                ->run('git rev-parse --is-inside-work-tree 2>/dev/null');
+                ->run('git rev-parse --is-inside-work-tree '.HerdEnvironment::suppressStderr());
 
             if (! $isGit->successful()) {
                 continue;
@@ -184,20 +184,12 @@ class InstallationController extends Controller
      */
     private function startBackgroundCommand(Installation $installation, string $command): void
     {
-        $php = getenv('HOME').'/Library/Application Support/Herd/bin/php';
+        $php = HerdEnvironment::phpBin();
         $artisan = base_path('artisan');
 
-        // Raw exec() is used intentionally to detach the process (& suffix).
+        // Raw exec() is used intentionally to detach the process.
         // Laravel's Process facade does not support fire-and-forget background execution.
-        $exec = sprintf(
-            '"%s" "%s" %s %d > /dev/null 2>&1 &',
-            $php,
-            $artisan,
-            $command,
-            $installation->id,
-        );
-
-        exec($exec);
+        exec(HerdEnvironment::backgroundExecCommand($php, $artisan, $command, $installation->id));
     }
 
     /**

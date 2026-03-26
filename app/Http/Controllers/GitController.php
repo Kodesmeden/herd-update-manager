@@ -16,9 +16,10 @@ class GitController extends Controller
     {
         $env = HerdEnvironment::env();
         $path = $installation->path;
+        $suppress = HerdEnvironment::suppressStderr();
 
         $isGitRepo = Process::path($path)->env($env)->timeout(5)
-            ->run('git rev-parse --is-inside-work-tree 2>/dev/null');
+            ->run("git rev-parse --is-inside-work-tree {$suppress}");
 
         if (! $isGitRepo->successful()) {
             return response()->json(['is_git_repo' => false]);
@@ -28,13 +29,13 @@ class GitController extends Controller
             ->run('git branch --show-current')->output());
 
         $remoteUrl = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git remote get-url origin 2>/dev/null')->output());
+            ->run("git remote get-url origin {$suppress}")->output());
 
         $hasChanges = trim(Process::path($path)->env($env)->timeout(5)
             ->run('git status --porcelain')->output()) !== '';
 
         $lastCommit = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git log --oneline -1 2>/dev/null')->output());
+            ->run("git log --oneline -1 {$suppress}")->output());
 
         $defaultBranch = $this->detectDefaultBranch($path, $env);
 
@@ -42,7 +43,7 @@ class GitController extends Controller
 
         if ($branch !== $defaultBranch) {
             $prCheck = Process::path($path)->env($env)->timeout(10)
-                ->run(sprintf('gh pr view %s --json state 2>/dev/null', escapeshellarg($branch)));
+                ->run(sprintf("gh pr view %s --json state {$suppress}", escapeshellarg($branch)));
 
             if ($prCheck->successful()) {
                 /** @var array{state: string}|null $prData */
@@ -212,7 +213,7 @@ class GitController extends Controller
         $prCheck = Process::path($path)
             ->env($env)
             ->timeout(15)
-            ->run(sprintf('gh pr view %s --json mergeable,url,state 2>&1', escapeshellarg($branch)));
+            ->run(sprintf('gh pr view %s --json mergeable,url,state', escapeshellarg($branch)));
 
         if (! $prCheck->successful()) {
             return response()->json([
@@ -260,9 +261,11 @@ class GitController extends Controller
      */
     private function detectDefaultBranch(string $path, array $env): string
     {
+        $suppress = HerdEnvironment::suppressStderr();
+
         // GitHub CLI is authoritative for the default branch
         $ghResult = Process::path($path)->env($env)->timeout(10)
-            ->run('gh repo view --json defaultBranchRef -q .defaultBranchRef.name 2>/dev/null');
+            ->run("gh repo view --json defaultBranchRef -q .defaultBranchRef.name {$suppress}");
 
         if ($ghResult->successful() && trim($ghResult->output()) !== '') {
             return trim($ghResult->output());
@@ -270,7 +273,7 @@ class GitController extends Controller
 
         // Fall back to git symbolic-ref (may be stale)
         $result = Process::path($path)->env($env)->timeout(5)
-            ->run('git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null');
+            ->run("git symbolic-ref refs/remotes/origin/HEAD {$suppress}");
 
         if ($result->successful()) {
             $ref = trim($result->output());

@@ -4,26 +4,47 @@ namespace App\Support;
 
 use Illuminate\Support\Facades\File;
 
-// TODO: Add Windows support. Currently macOS-only due to hardcoded paths
-// (~/Library/Application Support/Herd/...), PATH separator (:), getenv('HOME'),
-// Unix shell syntax (head, 2>/dev/null), and background exec (& suffix).
-// See also: DiagnosticsController, InstallationController, GitController, config/herd.php.
 class HerdEnvironment
 {
+    /**
+     * Check if running on Windows.
+     */
+    public static function isWindows(): bool
+    {
+        return PHP_OS_FAMILY === 'Windows';
+    }
+
+    /**
+     * Get the current user's home directory.
+     */
+    public static function home(): string
+    {
+        if (self::isWindows()) {
+            return getenv('USERPROFILE') ?: getenv('HOME') ?: '';
+        }
+
+        return getenv('HOME') ?: '';
+    }
+
     /**
      * Build the full PATH for Herd binaries.
      */
     public static function path(): string
     {
-        return implode(':', [
-            self::herdBinPath(),
-            self::nodeBinPath(),
-            '/opt/homebrew/bin',
-            '/opt/homebrew/sbin',
-            '/usr/local/bin',
-            '/usr/bin',
-            '/bin',
-        ]);
+        $paths = [self::herdBinPath(), self::nodeBinPath()];
+
+        if (! self::isWindows()) {
+            array_push(
+                $paths,
+                '/opt/homebrew/bin',
+                '/opt/homebrew/sbin',
+                '/usr/local/bin',
+                '/usr/bin',
+                '/bin',
+            );
+        }
+
+        return implode(PATH_SEPARATOR, array_filter($paths));
     }
 
     /**
@@ -33,11 +54,20 @@ class HerdEnvironment
      */
     public static function env(): array
     {
-        return array_filter([
+        $env = [
             'PATH' => self::path(),
-            'SSH_AUTH_SOCK' => getenv('SSH_AUTH_SOCK') ?: null,
-            'HOME' => getenv('HOME'),
-        ]);
+            'HOME' => self::home(),
+        ];
+
+        if (! self::isWindows()) {
+            $sshSock = getenv('SSH_AUTH_SOCK');
+
+            if ($sshSock) {
+                $env['SSH_AUTH_SOCK'] = $sshSock;
+            }
+        }
+
+        return array_filter($env);
     }
 
     /**
@@ -45,7 +75,59 @@ class HerdEnvironment
      */
     public static function phpBin(): string
     {
-        return self::herdBinPath().'/php';
+        return self::herdBinPath().DIRECTORY_SEPARATOR.'php';
+    }
+
+    /**
+     * Get the platform null device for suppressing output.
+     */
+    public static function nullDevice(): string
+    {
+        return self::isWindows() ? 'nul' : '/dev/null';
+    }
+
+    /**
+     * Build a shell fragment that suppresses stderr.
+     */
+    public static function suppressStderr(): string
+    {
+        return '2>'.self::nullDevice();
+    }
+
+    /**
+     * Build a background exec command string for fire-and-forget execution.
+     */
+    public static function backgroundExecCommand(string $php, string $artisan, string $command, int $id): string
+    {
+        if (self::isWindows()) {
+            return sprintf('start /b "" "%s" "%s" %s %d', $php, $artisan, $command, $id);
+        }
+
+        return sprintf('"%s" "%s" %s %d > /dev/null 2>&1 &', $php, $artisan, $command, $id);
+    }
+
+    /**
+     * Get the default Herd sites path for the current platform.
+     */
+    public static function defaultSitesPath(): string
+    {
+        if (self::isWindows()) {
+            return self::home().'\\Herd';
+        }
+
+        return '/Users/'.get_current_user().'/Herd';
+    }
+
+    /**
+     * Get the Herd application config base directory.
+     */
+    private static function herdConfigBase(): string
+    {
+        if (self::isWindows()) {
+            return self::home().DIRECTORY_SEPARATOR.'AppData'.DIRECTORY_SEPARATOR.'Local'.DIRECTORY_SEPARATOR.'Herd';
+        }
+
+        return self::home().'/Library/Application Support/Herd';
     }
 
     /**
@@ -53,7 +135,7 @@ class HerdEnvironment
      */
     private static function herdBinPath(): string
     {
-        return getenv('HOME').'/Library/Application Support/Herd/bin';
+        return self::herdConfigBase().DIRECTORY_SEPARATOR.'bin';
     }
 
     /**
@@ -61,10 +143,12 @@ class HerdEnvironment
      */
     private static function nodeBinPath(): string
     {
-        $nvmBase = getenv('HOME').'/Library/Application Support/Herd/config/nvm/versions/node';
+        $nvmBase = self::herdConfigBase().DIRECTORY_SEPARATOR.'config'
+            .DIRECTORY_SEPARATOR.'nvm'.DIRECTORY_SEPARATOR.'versions'
+            .DIRECTORY_SEPARATOR.'node';
 
         if (! File::isDirectory($nvmBase)) {
-            return '/usr/local/bin';
+            return self::isWindows() ? '' : '/usr/local/bin';
         }
 
         $nodeVersion = collect(File::directories($nvmBase))
@@ -73,6 +157,6 @@ class HerdEnvironment
             ->reverse()
             ->first() ?? 'v22';
 
-        return $nvmBase.'/'.$nodeVersion.'/bin';
+        return $nvmBase.DIRECTORY_SEPARATOR.$nodeVersion.DIRECTORY_SEPARATOR.'bin';
     }
 }

@@ -14,14 +14,14 @@ class DiagnosticsController extends Controller
     public function run(string $check): JsonResponse
     {
         $checks = [
-            'git' => ['command' => 'git --version', 'label' => 'Git'],
-            'gh' => ['command' => 'gh --version | head -1', 'label' => 'GitHub CLI'],
-            'gh-auth' => ['command' => 'gh auth status 2>&1', 'label' => 'GitHub Auth'],
-            'ssh' => ['command' => 'ssh -T git@github.com 2>&1; true', 'label' => 'SSH'],
-            'composer' => ['command' => 'composer --version', 'label' => 'Composer'],
-            'php' => ['command' => 'php --version | head -1', 'label' => 'PHP'],
-            'node' => ['command' => 'node --version', 'label' => 'Node'],
-            'npm' => ['command' => 'npm --version', 'label' => 'NPM'],
+            'git' => ['command' => 'git --version'],
+            'gh' => ['command' => 'gh --version', 'firstLine' => true],
+            'gh-auth' => ['command' => 'gh auth status'],
+            'ssh' => ['command' => 'ssh -T git@github.com'],
+            'composer' => ['command' => 'composer --version'],
+            'php' => ['command' => 'php --version', 'firstLine' => true],
+            'node' => ['command' => 'node --version'],
+            'npm' => ['command' => 'npm --version'],
         ];
 
         if (! isset($checks[$check])) {
@@ -33,6 +33,10 @@ class DiagnosticsController extends Controller
             ->run($checks[$check]['command']);
 
         $output = trim($result->output().$result->errorOutput());
+
+        if ($checks[$check]['firstLine'] ?? false) {
+            $output = explode("\n", $output)[0];
+        }
 
         return response()->json([
             'ok' => $result->successful() || str_contains($output, 'successfully authenticated'),

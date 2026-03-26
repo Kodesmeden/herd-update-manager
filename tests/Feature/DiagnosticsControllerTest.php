@@ -17,7 +17,7 @@ it('runs a valid diagnostic check', function () {
 
 it('returns failure for a failing diagnostic', function () {
     Process::fake([
-        'gh --version | head -1' => Process::result(output: '', errorOutput: 'command not found: gh', exitCode: 127),
+        'gh --version' => Process::result(output: '', errorOutput: 'command not found: gh', exitCode: 127),
     ]);
 
     $this->getJson(route('diagnostics.run', 'gh'))
@@ -38,9 +38,10 @@ it('returns error for unknown diagnostic check', function () {
 
 it('treats ssh authentication success as ok', function () {
     Process::fake([
-        'ssh -T git@github.com 2>&1; true' => Process::result(
-            output: "Hi user! You've successfully authenticated, but GitHub does not provide shell access.",
-            exitCode: 0,
+        'ssh -T git@github.com' => Process::result(
+            output: '',
+            errorOutput: "Hi user! You've successfully authenticated, but GitHub does not provide shell access.",
+            exitCode: 1,
         ),
     ]);
 
