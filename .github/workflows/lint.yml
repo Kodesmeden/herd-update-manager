@@ -1,0 +1,38 @@
+name: lint
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+
+      - name: Install PHP Dependencies
+        run: composer install -q --no-ansi --no-interaction --no-scripts --no-progress --prefer-dist
+
+      - name: Install Node Dependencies
+        run: npm install
+
+      - name: Check PHP Style
+        run: composer lint:check
+
+      - name: Check Frontend Formatting
+        run: npm run format:check
+
+      - name: Check Frontend Lint
+        run: npm run lint:check
+
+      - name: Check TypeScript Types
+        run: npm run types:check
