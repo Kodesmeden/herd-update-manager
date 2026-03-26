@@ -8,7 +8,7 @@ import {
     Sun,
     Upload,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useCallback, useState } from 'react';
 import DiagnosticsPanel from '@/components/diagnostics-panel';
 import InstallationCard from '@/components/installation-card';
 import type { Installation } from '@/components/installation-card';
@@ -45,6 +45,14 @@ export default function Welcome({ installations, showHidden }: Props) {
     const [fetching, setFetching] = useState(false);
     const [showPushAllDialog, setShowPushAllDialog] = useState(false);
     const [pushAllMessage, setPushAllMessage] = useState('Update packages');
+    const [changesMap, setChangesMap] = useState<Record<number, boolean>>({});
+
+    const handleHasChanges = useCallback(
+        (installationId: number, hasChanges: boolean) => {
+            setChangesMap((prev) => ({ ...prev, [installationId]: hasChanges }));
+        },
+        [],
+    );
 
     async function handleFetchAll() {
         setFetching(true);
@@ -80,6 +88,9 @@ export default function Welcome({ installations, showHidden }: Props) {
     );
     const hasRecentStatus = installations.some((i) => i.status !== 'idle');
     const visibleCount = installations.filter((i) => !i.hidden).length;
+    const anyHasChanges = installations.some(
+        (i) => !i.hidden && changesMap[i.id],
+    );
 
     const { stop, start } = usePoll(2000, {}, { autoStart: false });
 
@@ -186,15 +197,19 @@ export default function Welcome({ installations, showHidden }: Props) {
                                 Diagnostics
                             </span>
                         </Button>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setShowPushAllDialog(true)}
-                            disabled={isBusy || visibleCount === 0}
-                        >
-                            <Upload className="h-4 w-4" />
-                            <span className="hidden sm:inline">Push All</span>
-                        </Button>
+                        {anyHasChanges && (
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setShowPushAllDialog(true)}
+                                disabled={isBusy}
+                            >
+                                <Upload className="h-4 w-4" />
+                                <span className="hidden sm:inline">
+                                    Push All
+                                </span>
+                            </Button>
+                        )}
                         <Button
                             size="sm"
                             onClick={handleUpdateAll}
@@ -231,6 +246,7 @@ export default function Welcome({ installations, showHidden }: Props) {
                                 setPushModal(inst);
                                 setCommitMessage('');
                             }}
+                            onHasChanges={handleHasChanges}
                         />
                     ))}
                 </div>

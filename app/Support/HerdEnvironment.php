@@ -4,6 +4,10 @@ namespace App\Support;
 
 use Illuminate\Support\Facades\File;
 
+// TODO: Add Windows support. Currently macOS-only due to hardcoded paths
+// (~/Library/Application Support/Herd/...), PATH separator (:), getenv('HOME'),
+// Unix shell syntax (head, 2>/dev/null), and background exec (& suffix).
+// See also: DiagnosticsController, InstallationController, GitController, config/herd.php.
 class HerdEnvironment
 {
     /**

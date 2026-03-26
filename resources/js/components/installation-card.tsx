@@ -37,6 +37,7 @@ interface InstallationCardProps {
     onUpdate: (installation: Installation) => void;
     onPushQuick: (installation: Installation) => void;
     onPushWithMessage: (installation: Installation) => void;
+    onHasChanges?: (installationId: number, hasChanges: boolean) => void;
 }
 
 export default function InstallationCard({
@@ -44,6 +45,7 @@ export default function InstallationCard({
     onUpdate,
     onPushQuick,
     onPushWithMessage,
+    onHasChanges,
 }: InstallationCardProps) {
     const [showLog, setShowLog] = useState(false);
     const [meta, setMeta] = useState<Meta | null>(null);
@@ -56,6 +58,7 @@ export default function InstallationCard({
             .then((data: Meta) => {
                 setMeta(data);
                 setMetaLoading(false);
+                onHasChanges?.(installation.id, data.git?.has_changes ?? false);
             })
             .catch(() => setMetaLoading(false));
     };
