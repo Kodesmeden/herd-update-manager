@@ -13,14 +13,15 @@ A web dashboard for managing updates across all your Laravel projects running on
 
 ## Requirements
 
-- macOS
-- [Laravel Herd](https://herd.laravel.com) (provides PHP and Node)
+- [Laravel Herd](https://herd.laravel.com) (macOS or Windows)
 - Composer
 - [GitHub CLI](https://cli.github.com) (optional, only needed for pull request features)
 
 ## Installation
 
 Clone this repository into your Herd directory:
+
+**macOS:**
 
 ```bash
 cd ~/Herd
@@ -29,15 +30,24 @@ cd update
 composer run setup
 ```
 
+**Windows:**
+
+```powershell
+cd ~\Herd
+git clone <repo-url> update
+cd update
+composer run setup
+```
+
 The `setup` script installs all dependencies, creates the `.env` file, generates an app key, runs migrations, and builds the frontend assets.
 
-Since Herd automatically serves all projects in `~/Herd/`, the app is immediately available at:
+Since Herd automatically serves all projects in the Herd directory, the app is immediately available at `http://update.test`. To enable HTTPS:
 
-```
-https://update.test
+```bash
+herd secure update
 ```
 
-No additional server configuration is needed.
+The site is then available at `https://update.test`. No additional server configuration is needed.
 
 ## Development
 
@@ -61,7 +71,7 @@ php artisan test --compact
 
 ## How it works
 
-The app scans `~/Herd/` for Laravel projects and stores them as installations in a local SQLite database. When you trigger an update or push, it spawns background processes using Herd's bundled PHP and Node binaries, so each project runs with the correct runtime versions. Progress and output are tracked in the database and polled by the frontend every two seconds.
+The app scans the Herd directory (`~/Herd` on macOS, `~\Herd` on Windows) for Laravel projects and stores them as installations in a local SQLite database. When you trigger an update or push, it spawns background processes using Herd's bundled PHP and Node binaries, so each project runs with the correct runtime versions. Progress and output are tracked in the database and polled by the frontend every two seconds.
 
 ## License
 
