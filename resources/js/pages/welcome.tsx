@@ -49,7 +49,10 @@ export default function Welcome({ installations, showHidden }: Props) {
 
     const handleHasChanges = useCallback(
         (installationId: number, hasChanges: boolean) => {
-            setChangesMap((prev) => ({ ...prev, [installationId]: hasChanges }));
+            setChangesMap((prev) => ({
+                ...prev,
+                [installationId]: hasChanges,
+            }));
         },
         [],
     );
