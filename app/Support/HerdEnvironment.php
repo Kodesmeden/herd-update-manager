@@ -59,6 +59,10 @@ class HerdEnvironment
     {
         $nvmBase = getenv('HOME').'/Library/Application Support/Herd/config/nvm/versions/node';
 
+        if (! File::isDirectory($nvmBase)) {
+            return '/usr/local/bin';
+        }
+
         $nodeVersion = collect(File::directories($nvmBase))
             ->map(fn (string $path) => basename($path))
             ->sort(SORT_NATURAL)

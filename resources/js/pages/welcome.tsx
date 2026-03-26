@@ -54,7 +54,7 @@ export default function Welcome({ installations, showHidden }: Props) {
                 method: 'POST',
                 headers: { 'X-XSRF-TOKEN': getCsrfToken() },
             });
-            router.reload({ preserveScroll: true });
+            router.reload();
         } catch {
             // silently fail
         }
