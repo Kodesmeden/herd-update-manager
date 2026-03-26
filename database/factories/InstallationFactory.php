@@ -21,7 +21,7 @@ class InstallationFactory extends Factory
 
         return [
             'name' => $name,
-            'path' => '/Users/kodesmeden/Herd/'.$name,
+            'path' => config('herd.path').'/'.$name,
             'hidden' => false,
             'status' => 'idle',
             'progress' => 0,
