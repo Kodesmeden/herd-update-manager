@@ -42,6 +42,9 @@ it('skips commit when there are no changes', function () {
 
 it('fails when git pull fails', function () {
     Process::fake([
+        'git add --all' => Process::result(''),
+        'git status --porcelain' => Process::result('M composer.lock'),
+        'git commit*' => Process::result('1 file changed'),
         'git pull --rebase' => Process::result(output: '', errorOutput: 'CONFLICT', exitCode: 1),
     ]);
 

@@ -30,15 +30,6 @@ class PushInstallation extends Command
             'output' => null,
         ]);
 
-        // Pull latest changes before pushing
-        $installation->update(['current_step' => 'Git pull']);
-        $pullResult = Process::path($path)->env($env)->timeout(60)->run('git pull --rebase');
-        $output .= $pullResult->output().$pullResult->errorOutput();
-
-        if (! $pullResult->successful()) {
-            return $this->markFailed($installation, $output);
-        }
-
         // Stage all changes
         $addResult = Process::path($path)->env($env)->timeout(30)->run('git add --all');
         $output .= $addResult->output().$addResult->errorOutput();
@@ -61,7 +52,16 @@ class PushInstallation extends Command
             }
         }
 
-        // Push (there may be commits even without local changes)
+        // Pull latest changes before pushing (after commit so rebase works)
+        $installation->update(['current_step' => 'Git pull']);
+        $pullResult = Process::path($path)->env($env)->timeout(60)->run('git pull --rebase');
+        $output .= $pullResult->output().$pullResult->errorOutput();
+
+        if (! $pullResult->successful()) {
+            return $this->markFailed($installation, $output);
+        }
+
+        // Push
         $installation->update(['current_step' => 'Git push']);
 
         $pushResult = Process::path($path)->env($env)->timeout(60)->run('git push');
