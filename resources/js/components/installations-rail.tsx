@@ -306,7 +306,7 @@ export default function InstallationsRail({
                 </div>
                 <div className="flex items-center justify-between px-2.5 pt-3 font-mono text-[11px] text-muted-foreground/70">
                     <span>Last fetch</span>
-                    <span>{lastFetch ?? '–'}</span>
+                    <span>{lastFetch ?? '-'}</span>
                 </div>
             </div>
         </aside>

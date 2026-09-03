@@ -267,7 +267,7 @@ export default function InstallationRow({
                     {metaLoading && !meta ? (
                         <Skeleton className="h-3.5 w-8" />
                     ) : (
-                        (laravelVersion ?? '—')
+                        (laravelVersion ?? '-')
                     )}
                 </span>
 

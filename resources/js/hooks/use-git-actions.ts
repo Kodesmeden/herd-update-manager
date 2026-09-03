@@ -361,7 +361,6 @@ export function useGitActions({
     return {
         actionLoading,
         message,
-        dismissMessage: () => setMessage(null),
         pullRequest,
         branchList,
         branchDropdownOpen,

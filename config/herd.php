@@ -1,5 +1,7 @@
 <?php
 
+use App\Support\HerdEnvironment;
+
 return [
 
     /*
@@ -12,8 +14,6 @@ return [
     |
     */
 
-    'path' => env('HERD_PATH', PHP_OS_FAMILY === 'Windows'
-        ? (getenv('USERPROFILE') ?: getenv('HOME')).'\\Herd'
-        : '/Users/'.get_current_user().'/Herd'),
+    'path' => env('HERD_PATH', HerdEnvironment::defaultSitesPath()),
 
 ];
