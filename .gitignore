@@ -42,6 +42,7 @@ Thumbs.db
 npm-debug.log
 yarn-error.log
 *.png
+!/public/*.png
 
 # Legacy
 Homestead.json
