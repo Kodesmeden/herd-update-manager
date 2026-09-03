@@ -3,11 +3,11 @@
 namespace App\Http\Controllers;
 
 use App\Models\Installation;
+use App\Support\GitRepository;
 use App\Support\HerdEnvironment;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Support\Facades\File;
-use Illuminate\Support\Facades\Process;
 use Inertia\Inertia;
 use Inertia\Response;
 
@@ -36,7 +36,24 @@ class InstallationController extends Controller
         return Inertia::render('welcome', [
             'installations' => $query->get(),
             'showHidden' => $showHidden,
+            'hiddenCount' => Installation::query()->where('hidden', true)->count(),
+            'herdPath' => $this->herdPathForDisplay(),
         ]);
+    }
+
+    /**
+     * The Herd directory with the home directory shortened to a tilde.
+     */
+    private function herdPathForDisplay(): string
+    {
+        $herdPath = (string) config('herd.path');
+        $home = (string) (getenv('HOME') ?: getenv('USERPROFILE'));
+
+        if ($home !== '' && str_starts_with($herdPath, $home)) {
+            return '~'.substr($herdPath, strlen($home));
+        }
+
+        return $herdPath;
     }
 
     /**
@@ -44,8 +61,6 @@ class InstallationController extends Controller
      */
     public function fetchAll(): JsonResponse
     {
-        $env = HerdEnvironment::env();
-
         $installations = Installation::query()
             ->where('hidden', false)
             ->get();
@@ -53,26 +68,26 @@ class InstallationController extends Controller
         $fetched = 0;
 
         foreach ($installations as $installation) {
-            $isGit = Process::path($installation->path)->env($env)->timeout(5)
-                ->run('git rev-parse --is-inside-work-tree '.HerdEnvironment::suppressStderr());
+            $repository = new GitRepository($installation->path);
 
-            if (! $isGit->successful()) {
+            if (! $repository->isRepository()) {
                 continue;
             }
 
-            Process::path($installation->path)->env($env)->timeout(30)
-                ->run('git fetch --all --prune');
-
-            Process::path($installation->path)->env($env)->timeout(10)
-                ->run('git remote set-head origin --auto');
+            $repository->fetchAllRemotes();
+            $repository->updateRemoteHead();
 
             // Pull latest changes if working tree is clean and fast-forward is possible
-            $hasChanges = trim(Process::path($installation->path)->env($env)->timeout(5)
-                ->run('git status --porcelain')->output()) !== '';
+            if (! $repository->hasUncommittedChanges()) {
+                $repository->pullFastForwardOnly();
+            }
 
-            if (! $hasChanges) {
-                Process::path($installation->path)->env($env)->timeout(30)
-                    ->run('git pull --ff-only');
+            // Keep the local default branch current too. Pulling only ever touches the
+            // active branch, so working on a feature branch would leave it behind.
+            $defaultBranch = $repository->defaultBranch();
+
+            if ($repository->currentBranch() !== $defaultBranch) {
+                $repository->fastForwardFromOrigin($defaultBranch);
             }
 
             $fetched++;

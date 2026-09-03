@@ -1,18 +1,12 @@
 import { Head, router, usePoll } from '@inertiajs/react';
-import {
-    CloudDownload,
-    Monitor,
-    Moon,
-    RefreshCw,
-    Stethoscope,
-    Sun,
-    Upload,
-} from 'lucide-react';
-import { useCallback, useState } from 'react';
-import DiagnosticsPanel from '@/components/diagnostics-panel';
-import InstallationCard from '@/components/installation-card';
-import type { Installation } from '@/components/installation-card';
+import { CloudDownload, RefreshCw, Search, Upload } from 'lucide-react';
+import { useCallback, useMemo, useState } from 'react';
+import InstallationRow from '@/components/installation-row';
+import type { Installation } from '@/components/installation-row';
+import InstallationsRail from '@/components/installations-rail';
+import type { ViewKey } from '@/components/installations-rail';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
     Dialog,
     DialogContent,
@@ -22,10 +16,11 @@ import {
 } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import SimpleTooltip from '@/components/ui/simple-tooltip';
-import { useAppearance } from '@/hooks/use-appearance';
 import { getCsrfToken } from '@/lib/utils';
+import type { InstallationMeta } from '@/types/git';
 import {
     fetchAll,
+    hide,
     push,
     pushAll,
     update,
@@ -35,27 +30,152 @@ import {
 interface Props {
     installations: Installation[];
     showHidden: boolean;
+    hiddenCount: number;
+    herdPath: string;
 }
 
-export default function Welcome({ installations, showHidden }: Props) {
-    const { appearance, updateAppearance } = useAppearance();
-    const [pushModal, setPushModal] = useState<Installation | null>(null);
-    const [commitMessage, setCommitMessage] = useState('');
-    const [showDiagnostics, setShowDiagnostics] = useState(false);
-    const [fetching, setFetching] = useState(false);
-    const [showPushAllDialog, setShowPushAllDialog] = useState(false);
-    const [pushAllMessage, setPushAllMessage] = useState('Update packages');
-    const [changesMap, setChangesMap] = useState<Record<number, boolean>>({});
+type PushDialog =
+    | { kind: 'one'; installation: Installation }
+    | { kind: 'all' }
+    | { kind: 'selected'; ids: number[] };
 
-    const handleHasChanges = useCallback(
-        (installationId: number, hasChanges: boolean) => {
-            setChangesMap((prev) => ({
-                ...prev,
-                [installationId]: hasChanges,
-            }));
+const DEFAULT_COMMIT_MESSAGE = 'Update packages';
+
+const COLUMNS =
+    'grid grid-cols-[24px_minmax(210px,1.6fr)_56px_minmax(150px,1.2fr)_116px_minmax(140px,1.8fr)_332px] items-center gap-x-3';
+
+const VIEW_TITLES: Record<ViewKey, string> = {
+    all: 'All sites',
+    dirty: 'Uncommitted changes',
+    behind: 'Behind main',
+    pr: 'Open pull requests',
+    hidden: 'Hidden',
+};
+
+export default function Welcome({
+    installations,
+    showHidden,
+    hiddenCount,
+    herdPath,
+}: Props) {
+    const [metaMap, setMetaMap] = useState<Record<number, InstallationMeta>>(
+        {},
+    );
+    const [view, setView] = useState<ViewKey>(showHidden ? 'hidden' : 'all');
+    const [query, setQuery] = useState('');
+    const [selected, setSelected] = useState<number[]>([]);
+    const [pushDialog, setPushDialog] = useState<PushDialog | null>(null);
+    const [commitMessage, setCommitMessage] = useState(DEFAULT_COMMIT_MESSAGE);
+    const [fetching, setFetching] = useState(false);
+    const [lastFetch, setLastFetch] = useState<string | null>(null);
+
+    const handleMeta = useCallback(
+        (installationId: number, meta: InstallationMeta) => {
+            setMetaMap((prev) => ({ ...prev, [installationId]: meta }));
         },
         [],
     );
+
+    const visible = installations.filter((i) => !i.hidden);
+
+    const counts: Record<ViewKey, number> = {
+        all: visible.length,
+        dirty: visible.filter((i) => metaMap[i.id]?.git?.has_changes).length,
+        behind: visible.filter(
+            (i) => (metaMap[i.id]?.git?.behind_default ?? 0) > 0,
+        ).length,
+        pr: visible.filter((i) => metaMap[i.id]?.git?.pull_request).length,
+        hidden: hiddenCount,
+    };
+
+    const rows = useMemo(() => {
+        const needle = query.trim().toLowerCase();
+
+        return installations.filter((installation) => {
+            const info = metaMap[installation.id]?.git;
+
+            if (
+                view === 'hidden' ? !installation.hidden : installation.hidden
+            ) {
+                return false;
+            }
+
+            if (view === 'dirty' && !info?.has_changes) {
+                return false;
+            }
+
+            if (view === 'behind' && !(info && info.behind_default > 0)) {
+                return false;
+            }
+
+            if (view === 'pr' && !info?.pull_request) {
+                return false;
+            }
+
+            if (!needle) {
+                return true;
+            }
+
+            const haystack = [
+                installation.name,
+                metaMap[installation.id]?.app_name ?? '',
+                info?.branch ?? '',
+            ]
+                .join(' ')
+                .toLowerCase();
+
+            return haystack.includes(needle);
+        });
+    }, [installations, metaMap, view, query]);
+
+    const selectedInView = selected.filter((id) =>
+        rows.some((row) => row.id === id),
+    );
+    const allSelected =
+        rows.length > 0 && selectedInView.length === rows.length;
+
+    const isBusy = installations.some(
+        (i) => i.status === 'running' || i.status === 'pushing',
+    );
+    const hasRecentStatus = installations.some((i) => i.status !== 'idle');
+    const anyHasChanges = visible.some((i) => metaMap[i.id]?.git?.has_changes);
+
+    const { stop, start } = usePoll(2000, {}, { autoStart: false });
+
+    if (hasRecentStatus) {
+        start();
+    } else {
+        stop();
+    }
+
+    function handleViewChange(next: ViewKey) {
+        setSelected([]);
+        setView(next);
+
+        if (next === 'hidden' && !showHidden) {
+            router.get(
+                '/',
+                { show_hidden: 1 },
+                { preserveScroll: true, preserveState: true },
+            );
+        }
+
+        if (next !== 'hidden' && showHidden) {
+            router.get('/', {}, { preserveScroll: true, preserveState: true });
+        }
+    }
+
+    function toggleSelect(installationId: number) {
+        setSelected((prev) =>
+            prev.includes(installationId)
+                ? prev.filter((id) => id !== installationId)
+                : [...prev, installationId],
+        );
+    }
+
+    function toggleSelectAll() {
+        setSelected(allSelected ? [] : rows.map((row) => row.id));
+    }
 
     async function handleFetchAll() {
         setFetching(true);
@@ -65,6 +185,12 @@ export default function Welcome({ installations, showHidden }: Props) {
                 method: 'POST',
                 headers: { 'X-XSRF-TOKEN': getCsrfToken() },
             });
+            setLastFetch(
+                new Date().toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                }),
+            );
             router.reload();
         } catch {
             // silently fail
@@ -73,34 +199,31 @@ export default function Welcome({ installations, showHidden }: Props) {
         setFetching(false);
     }
 
-    function cycleAppearance() {
-        const next =
-            appearance === 'light'
-                ? 'dark'
-                : appearance === 'dark'
-                  ? 'system'
-                  : 'light';
-        updateAppearance(next);
-    }
+    /**
+     * Run a per-installation POST for each id, then pull the list back in.
+     */
+    async function postForEach(
+        ids: number[],
+        url: (id: number) => string,
+        body?: Record<string, string>,
+    ) {
+        for (const id of ids) {
+            try {
+                await fetch(url(id), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-XSRF-TOKEN': getCsrfToken(),
+                    },
+                    body: body ? JSON.stringify(body) : undefined,
+                });
+            } catch {
+                // silently fail, the reload below shows the real state
+            }
+        }
 
-    const AppearanceIcon =
-        appearance === 'light' ? Sun : appearance === 'dark' ? Moon : Monitor;
-
-    const isBusy = installations.some(
-        (i) => i.status === 'running' || i.status === 'pushing',
-    );
-    const hasRecentStatus = installations.some((i) => i.status !== 'idle');
-    const visibleCount = installations.filter((i) => !i.hidden).length;
-    const anyHasChanges = installations.some(
-        (i) => !i.hidden && changesMap[i.id],
-    );
-
-    const { stop, start } = usePoll(2000, {}, { autoStart: false });
-
-    if (hasRecentStatus) {
-        start();
-    } else {
-        stop();
+        setSelected([]);
+        router.reload();
     }
 
     function handleUpdate(installation: Installation) {
@@ -111,202 +234,256 @@ export default function Welcome({ installations, showHidden }: Props) {
         router.post(updateAll.url(), {}, { preserveScroll: true });
     }
 
-    function handlePushQuick(installation: Installation) {
-        router.post(push.url(installation.id), {}, { preserveScroll: true });
+    function handleUpdateSelected() {
+        postForEach(selectedInView, (id) => update.url(id));
     }
 
-    function handlePushWithMessage() {
-        if (!pushModal) {
+    async function handleHideSelected() {
+        for (const id of selectedInView) {
+            try {
+                await fetch(hide.url(id), {
+                    method: 'PATCH',
+                    headers: { 'X-XSRF-TOKEN': getCsrfToken() },
+                });
+            } catch {
+                // silently fail, the reload below shows the real state
+            }
+        }
+
+        setSelected([]);
+        router.reload();
+    }
+
+    function openPushDialog(dialog: PushDialog) {
+        setCommitMessage(DEFAULT_COMMIT_MESSAGE);
+        setPushDialog(dialog);
+    }
+
+    function handleConfirmPush() {
+        const message = commitMessage.trim();
+
+        if (!pushDialog || !message) {
             return;
         }
 
-        router.post(
-            push.url(pushModal.id),
-            { message: commitMessage },
-            { preserveScroll: true },
-        );
-        setPushModal(null);
-        setCommitMessage('');
-    }
-
-    function handlePushAll() {
-        if (!pushAllMessage.trim()) {
-            return;
+        if (pushDialog.kind === 'one') {
+            router.post(
+                push.url(pushDialog.installation.id),
+                { message },
+                { preserveScroll: true },
+            );
+        } else if (pushDialog.kind === 'all') {
+            router.post(pushAll.url(), { message }, { preserveScroll: true });
+        } else {
+            postForEach(pushDialog.ids, (id) => push.url(id), { message });
         }
 
-        router.post(
-            pushAll.url(),
-            { message: pushAllMessage },
-            { preserveScroll: true },
-        );
-        setShowPushAllDialog(false);
-        setPushAllMessage('Update packages');
+        setPushDialog(null);
+        setCommitMessage(DEFAULT_COMMIT_MESSAGE);
     }
 
-    function toggleShowHidden() {
-        router.get('/', showHidden ? {} : { show_hidden: 1 }, {
-            preserveScroll: true,
-        });
-    }
+    const dialogTitle =
+        pushDialog?.kind === 'one'
+            ? `Push ${pushDialog.installation.name}`
+            : pushDialog?.kind === 'selected'
+              ? `Push ${pushDialog.ids.length} installations`
+              : 'Push all installations';
 
     return (
         <>
             <Head title="Herd Update Manager" />
 
-            <header className="border-b border-border/50 bg-card">
-                <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
-                    <h1 className="text-xl font-bold">Herd Update Manager</h1>
-                    <div className="flex items-center gap-2">
-                        <SimpleTooltip content={`Theme: ${appearance}`}>
-                            <button
-                                onClick={cycleAppearance}
-                                className="cursor-pointer rounded-md p-1.5 text-muted-foreground transition-colors hover:text-foreground"
-                            >
-                                <AppearanceIcon className="h-4 w-4" />
-                            </button>
-                        </SimpleTooltip>
-                        <button
-                            onClick={toggleShowHidden}
-                            className={`cursor-pointer rounded-md px-2.5 py-1.5 text-sm transition-colors ${
-                                showHidden
-                                    ? 'bg-accent text-accent-foreground'
-                                    : 'text-muted-foreground hover:text-foreground'
-                            }`}
-                        >
-                            {showHidden ? 'Showing hidden' : 'Show hidden'}
-                        </button>
-                        <SimpleTooltip content="Fetch latest from all remotes">
+            <div className="flex min-h-screen">
+                <InstallationsRail
+                    view={view}
+                    counts={counts}
+                    herdPath={herdPath}
+                    lastFetch={lastFetch}
+                    onViewChange={handleViewChange}
+                />
+
+                <main className="flex min-w-[1180px] flex-1 flex-col">
+                    <header className="flex h-[58px] items-center gap-3.5 border-b border-border bg-card px-5">
+                        <h1 className="text-[15px] font-semibold">
+                            {VIEW_TITLES[view]}
+                        </h1>
+                        <span className="font-mono text-xs text-muted-foreground">
+                            {rows.length} of {counts.all}
+                        </span>
+
+                        <div className="ml-3 flex h-8 w-72 items-center gap-2 rounded-lg border border-input bg-background px-2.5">
+                            <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                            <input
+                                aria-label="Filter sites"
+                                placeholder="Filter sites"
+                                value={query}
+                                onChange={(e) => setQuery(e.target.value)}
+                                className="min-w-0 flex-1 bg-transparent text-[13px] outline-none placeholder:text-muted-foreground"
+                            />
+                        </div>
+
+                        <div className="ml-auto flex items-center gap-2">
+                            <SimpleTooltip content="Fetch latest from all remotes">
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={handleFetchAll}
+                                    disabled={fetching}
+                                >
+                                    <CloudDownload
+                                        className={`h-4 w-4 ${fetching ? 'animate-pulse' : ''}`}
+                                    />
+                                    {fetching ? 'Fetching...' : 'Fetch all'}
+                                </Button>
+                            </SimpleTooltip>
+
+                            {anyHasChanges && (
+                                <Button
+                                    variant="outline"
+                                    size="sm"
+                                    onClick={() =>
+                                        openPushDialog({ kind: 'all' })
+                                    }
+                                    disabled={isBusy}
+                                >
+                                    <Upload className="h-4 w-4" />
+                                    Push all
+                                </Button>
+                            )}
+
                             <Button
-                                variant="outline"
                                 size="sm"
-                                onClick={handleFetchAll}
-                                disabled={fetching}
+                                onClick={handleUpdateAll}
+                                disabled={isBusy || counts.all === 0}
+                                className="bg-brand text-brand-foreground hover:bg-brand/90"
                             >
-                                <CloudDownload
-                                    className={`h-4 w-4 ${fetching ? 'animate-pulse' : ''}`}
+                                <RefreshCw
+                                    className={`h-4 w-4 ${isBusy ? 'animate-spin' : ''}`}
                                 />
-                                <span className="hidden sm:inline">
-                                    {fetching ? 'Fetching...' : 'Git Fetch'}
-                                </span>
+                                Update all ({counts.all})
                             </Button>
-                        </SimpleTooltip>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setShowDiagnostics(!showDiagnostics)}
-                        >
-                            <Stethoscope className="h-4 w-4" />
-                            <span className="hidden sm:inline">
-                                Diagnostics
+                        </div>
+                    </header>
+
+                    {selectedInView.length > 0 && (
+                        <div className="flex h-11 items-center gap-3 border-b border-border bg-brand/5 px-5">
+                            <span className="text-[13px] font-semibold text-brand">
+                                {selectedInView.length} selected
                             </span>
-                        </Button>
-                        {anyHasChanges && (
                             <Button
                                 variant="outline"
                                 size="sm"
-                                onClick={() => setShowPushAllDialog(true)}
+                                className="h-7"
+                                onClick={handleUpdateSelected}
                                 disabled={isBusy}
                             >
-                                <Upload className="h-4 w-4" />
-                                <span className="hidden sm:inline">
-                                    Push All
-                                </span>
+                                Update packages
                             </Button>
-                        )}
-                        <Button
-                            size="sm"
-                            onClick={handleUpdateAll}
-                            disabled={isBusy || visibleCount === 0}
-                            className="bg-amber-600 text-white hover:bg-amber-700"
-                        >
-                            <RefreshCw
-                                className={`h-4 w-4 ${isBusy ? 'animate-spin' : ''}`}
-                            />
-                            Update All ({visibleCount})
-                        </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7"
+                                onClick={() =>
+                                    openPushDialog({
+                                        kind: 'selected',
+                                        ids: selectedInView,
+                                    })
+                                }
+                                disabled={isBusy}
+                            >
+                                Push
+                            </Button>
+                            <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7"
+                                onClick={handleHideSelected}
+                                disabled={isBusy}
+                            >
+                                Hide
+                            </Button>
+                            <Button
+                                variant="ghost"
+                                size="sm"
+                                className="ml-auto h-7"
+                                onClick={() => setSelected([])}
+                            >
+                                Clear
+                            </Button>
+                        </div>
+                    )}
+
+                    <div className="px-5 py-4">
+                        <div className="rounded-xl border border-border bg-card shadow-xs">
+                            <div
+                                className={`${COLUMNS} h-9 rounded-t-xl border-b border-border bg-muted/40 px-3.5 font-mono text-[10px] font-semibold tracking-[0.11em] text-muted-foreground uppercase`}
+                            >
+                                <Checkbox
+                                    aria-label="Select all"
+                                    checked={allSelected}
+                                    onCheckedChange={toggleSelectAll}
+                                />
+                                <span>Project</span>
+                                <span>Laravel</span>
+                                <span>Branch</span>
+                                <span>State</span>
+                                <span>Last commit</span>
+                                <span className="text-right">Actions</span>
+                            </div>
+
+                            {rows.map((installation) => (
+                                <InstallationRow
+                                    key={installation.id}
+                                    installation={installation}
+                                    meta={metaMap[installation.id] ?? null}
+                                    herdPath={herdPath}
+                                    columns={COLUMNS}
+                                    selected={selected.includes(
+                                        installation.id,
+                                    )}
+                                    onSelect={toggleSelect}
+                                    onMeta={handleMeta}
+                                    onUpdate={handleUpdate}
+                                    onPush={(inst) =>
+                                        openPushDialog({
+                                            kind: 'one',
+                                            installation: inst,
+                                        })
+                                    }
+                                />
+                            ))}
+
+                            {rows.length === 0 && (
+                                <p className="py-12 text-center text-[13px] text-muted-foreground">
+                                    {query.trim()
+                                        ? `No sites match “${query.trim()}”.`
+                                        : 'Nothing in this view right now.'}
+                                </p>
+                            )}
+
+                            <div className="flex items-center justify-between rounded-b-xl px-4 py-2.5 font-mono text-[11px] text-muted-foreground/70">
+                                <span>
+                                    {counts.dirty} uncommitted · {counts.behind}{' '}
+                                    behind main · {counts.pr} open PR
+                                </span>
+                                <span>
+                                    {hasRecentStatus
+                                        ? 'Refreshing every 2s while a job runs'
+                                        : 'Idle'}
+                                </span>
+                            </div>
+                        </div>
                     </div>
-                </div>
-            </header>
-
-            <main className="mx-auto max-w-5xl px-4 py-6">
-                {showDiagnostics && (
-                    <div className="mb-6">
-                        <DiagnosticsPanel
-                            visible={showDiagnostics}
-                            onToggle={() => setShowDiagnostics(false)}
-                        />
-                    </div>
-                )}
-
-                <div className="flex flex-col gap-3">
-                    {installations.map((installation) => (
-                        <InstallationCard
-                            key={installation.id}
-                            installation={installation}
-                            onUpdate={handleUpdate}
-                            onPushQuick={handlePushQuick}
-                            onPushWithMessage={(inst) => {
-                                setPushModal(inst);
-                                setCommitMessage('');
-                            }}
-                            onHasChanges={handleHasChanges}
-                        />
-                    ))}
-                </div>
-
-                {installations.length === 0 && (
-                    <p className="py-12 text-center text-muted-foreground">
-                        No installations found in the Herd directory.
-                    </p>
-                )}
-            </main>
+                </main>
+            </div>
 
             <Dialog
-                open={showPushAllDialog}
-                onOpenChange={(open) => !open && setShowPushAllDialog(false)}
+                open={pushDialog !== null}
+                onOpenChange={(open) => !open && setPushDialog(null)}
             >
                 <DialogContent>
                     <DialogHeader>
-                        <DialogTitle>Push All Installations</DialogTitle>
-                    </DialogHeader>
-                    <Input
-                        aria-label="Commit message"
-                        placeholder="Commit message..."
-                        value={pushAllMessage}
-                        onChange={(e) => setPushAllMessage(e.target.value)}
-                        onKeyDown={(e) => {
-                            if (e.key === 'Enter' && pushAllMessage.trim()) {
-                                handlePushAll();
-                            }
-                        }}
-                        autoFocus
-                    />
-                    <DialogFooter>
-                        <Button
-                            variant="outline"
-                            onClick={() => setShowPushAllDialog(false)}
-                        >
-                            Cancel
-                        </Button>
-                        <Button
-                            onClick={handlePushAll}
-                            disabled={!pushAllMessage.trim()}
-                        >
-                            Push All
-                        </Button>
-                    </DialogFooter>
-                </DialogContent>
-            </Dialog>
-
-            <Dialog
-                open={pushModal !== null}
-                onOpenChange={(open) => !open && setPushModal(null)}
-            >
-                <DialogContent>
-                    <DialogHeader>
-                        <DialogTitle>
-                            Commit & Push - {pushModal?.name}
-                        </DialogTitle>
+                        <DialogTitle>{dialogTitle}</DialogTitle>
                     </DialogHeader>
                     <Input
                         aria-label="Commit message"
@@ -315,7 +492,7 @@ export default function Welcome({ installations, showHidden }: Props) {
                         onChange={(e) => setCommitMessage(e.target.value)}
                         onKeyDown={(e) => {
                             if (e.key === 'Enter' && commitMessage.trim()) {
-                                handlePushWithMessage();
+                                handleConfirmPush();
                             }
                         }}
                         autoFocus
@@ -323,15 +500,15 @@ export default function Welcome({ installations, showHidden }: Props) {
                     <DialogFooter>
                         <Button
                             variant="outline"
-                            onClick={() => setPushModal(null)}
+                            onClick={() => setPushDialog(null)}
                         >
                             Cancel
                         </Button>
                         <Button
-                            onClick={handlePushWithMessage}
+                            onClick={handleConfirmPush}
                             disabled={!commitMessage.trim()}
                         >
-                            Commit & Push
+                            Push
                         </Button>
                     </DialogFooter>
                 </DialogContent>

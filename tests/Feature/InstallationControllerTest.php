@@ -4,6 +4,7 @@ use App\Models\Installation;
 use Illuminate\Filesystem\Filesystem;
 use Illuminate\Support\Collection;
 use Illuminate\Support\Facades\File;
+use Illuminate\Support\Facades\Process;
 
 /**
  * Fake the filesystem so syncInstallations finds the given installations on disk.
@@ -40,6 +41,8 @@ it('displays the home page with installations', function () {
             ->component('welcome')
             ->has('installations', 3)
             ->has('showHidden')
+            ->has('herdPath')
+            ->where('hiddenCount', 0)
         );
 });
 
@@ -53,6 +56,7 @@ it('hides hidden installations by default', function () {
         ->assertInertia(fn ($page) => $page
             ->has('installations', 2)
             ->where('showHidden', false)
+            ->where('hiddenCount', 1)
         );
 });
 
@@ -169,4 +173,64 @@ it('sets all visible installations to pushing on push all', function () {
     }
 
     expect($hidden->fresh())->status->toBe('idle');
+});
+
+/**
+ * Fake a clean repository sitting on the given branch for the fetch-all loop.
+ *
+ * @return array<string, mixed>
+ */
+function fakeFetchableRepositoryOn(string $branch): array
+{
+    return [
+        'git rev-parse --is-inside-work-tree*' => Process::result('true'),
+        'git fetch --all --prune' => Process::result(''),
+        'git remote set-head*' => Process::result(''),
+        'git status --porcelain*' => Process::result(''),
+        'git pull --ff-only' => Process::result('Already up to date.'),
+        'gh repo view*' => Process::result('main'),
+        'git branch --show-current*' => Process::result($branch),
+        'git fetch origin*' => Process::result(''),
+    ];
+}
+
+it('fast-forwards the local default branch when fetching from a feature branch', function () {
+    Process::fake(fakeFetchableRepositoryOn('develop'));
+
+    Installation::factory()->create();
+
+    $this->postJson(route('installations.fetch-all'))
+        ->assertSuccessful()
+        ->assertJsonPath('fetched', 1);
+
+    Process::assertRan(fn ($process) => str_contains($process->command, 'git fetch origin')
+        && str_contains($process->command, 'main'));
+
+    // The active branch must never be swapped out from under the user
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'git checkout'));
+});
+
+it('leaves the default branch to the ordinary pull when it is already checked out', function () {
+    Process::fake(fakeFetchableRepositoryOn('main'));
+
+    Installation::factory()->create();
+
+    $this->postJson(route('installations.fetch-all'))->assertSuccessful();
+
+    Process::assertRan('git pull --ff-only');
+    Process::assertDidntRun(fn ($process) => str_starts_with($process->command, 'git fetch origin'));
+});
+
+it('skips directories that are not git repositories', function () {
+    Process::fake([
+        'git rev-parse --is-inside-work-tree*' => Process::result(output: '', exitCode: 1),
+    ]);
+
+    Installation::factory()->create();
+
+    $this->postJson(route('installations.fetch-all'))
+        ->assertSuccessful()
+        ->assertJsonPath('fetched', 0);
+
+    Process::assertDidntRun('git fetch --all --prune');
 });

@@ -32,7 +32,7 @@ it('marks installation as failed when a step fails', function () {
 
     expect($installation->fresh())
         ->status->toBe('failed')
-        ->progress->toBe(40)
+        ->progress->toBe(50)
         ->current_step->toBe('NPM update')
         ->output->toContain('npm ERR!');
 });
@@ -42,9 +42,7 @@ it('captures output from all steps', function () {
         'composer update' => Process::result('Updating dependencies'),
         '*npm update*' => Process::result('updated 5 packages'),
         'npm run build' => Process::result('built successfully'),
-        '*view:clear*' => Process::result('Compiled views cleared'),
-        '*config:clear*' => Process::result('Configuration cache cleared'),
-        '*route:clear*' => Process::result('Route cache cleared'),
+        '*optimize:clear*' => Process::result('Caches cleared successfully'),
     ]);
 
     $installation = Installation::factory()->create();
@@ -57,5 +55,24 @@ it('captures output from all steps', function () {
     expect($output)
         ->toContain('Updating dependencies')
         ->toContain('updated 5 packages')
-        ->toContain('built successfully');
+        ->toContain('built successfully')
+        ->toContain('Caches cleared successfully');
+});
+
+it('runs exactly composer update, npm update, npm run build and optimize:clear', function () {
+    Process::fake(['*' => Process::result('ok')]);
+
+    $installation = Installation::factory()->create();
+
+    $this->artisan('app:update-installation', ['id' => $installation->id])
+        ->assertSuccessful();
+
+    Process::assertRan('composer update');
+    Process::assertRan('npm update');
+    Process::assertRan('npm run build');
+    Process::assertRan(fn ($process) => str_ends_with($process->command, 'artisan optimize:clear'));
+
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'view:clear'));
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'config:clear'));
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'route:clear'));
 });

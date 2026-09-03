@@ -57,3 +57,38 @@ it('supports all expected diagnostic checks', function (string $check) {
         ->assertSuccessful()
         ->assertJsonStructure(['ok', 'output']);
 })->with(['git', 'gh', 'gh-auth', 'ssh', 'composer', 'php', 'node', 'npm']);
+
+it('reuses the cached result instead of running the command again', function () {
+    Process::fake(['git --version' => Process::result('git version 2.45.0')]);
+
+    $this->getJson(route('diagnostics.run', 'git'))->assertSuccessful();
+    $this->getJson(route('diagnostics.run', 'git'))
+        ->assertSuccessful()
+        ->assertJson(['output' => 'git version 2.45.0']);
+
+    Process::assertRanTimes('git --version', 1);
+});
+
+it('runs the command again when a refresh is requested', function () {
+    Process::fake(['git --version' => Process::result('git version 2.45.0')]);
+
+    $this->getJson(route('diagnostics.run', 'git'))->assertSuccessful();
+    $this->getJson(route('diagnostics.run', ['check' => 'git', 'refresh' => 1]))
+        ->assertSuccessful();
+
+    Process::assertRanTimes('git --version', 2);
+});
+
+it('lists cached results without running any command', function () {
+    Process::fake(['git --version' => Process::result('git version 2.45.0')]);
+
+    $this->getJson(route('diagnostics.run', 'git'))->assertSuccessful();
+
+    $this->getJson(route('diagnostics.index'))
+        ->assertSuccessful()
+        ->assertJsonPath('checks.git.output', 'git version 2.45.0')
+        ->assertJsonPath('checks.git.ok', true)
+        ->assertJsonPath('checks.php', null);
+
+    Process::assertRanTimes('git --version', 1);
+});

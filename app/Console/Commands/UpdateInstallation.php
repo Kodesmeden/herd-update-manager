@@ -21,12 +21,10 @@ class UpdateInstallation extends Command
         $artisan = $path.DIRECTORY_SEPARATOR.'artisan';
 
         return [
-            ['command' => 'composer update', 'label' => 'Composer update', 'progress' => 15],
-            ['command' => 'npm update', 'label' => 'NPM update', 'progress' => 40, 'env' => ['PUPPETEER_SKIP_DOWNLOAD' => 'true']],
-            ['command' => 'npm run build', 'label' => 'Build assets', 'progress' => 70],
-            ['command' => "php {$artisan} view:clear", 'label' => 'Clear views', 'progress' => 85],
-            ['command' => "php {$artisan} config:clear", 'label' => 'Clear config', 'progress' => 92],
-            ['command' => "php {$artisan} route:clear", 'label' => 'Clear routes', 'progress' => 100],
+            ['command' => 'composer update', 'label' => 'Composer update', 'progress' => 25],
+            ['command' => 'npm update', 'label' => 'NPM update', 'progress' => 50, 'env' => ['PUPPETEER_SKIP_DOWNLOAD' => 'true']],
+            ['command' => 'npm run build', 'label' => 'Build assets', 'progress' => 75],
+            ['command' => "php {$artisan} optimize:clear", 'label' => 'Clear caches', 'progress' => 100],
         ];
     }
 

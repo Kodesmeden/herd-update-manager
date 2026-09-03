@@ -3,85 +3,19 @@
 namespace App\Http\Controllers;
 
 use App\Models\Installation;
-use App\Support\HerdEnvironment;
+use App\Support\GitRepository;
 use Illuminate\Http\JsonResponse;
-use Illuminate\Support\Facades\Process;
 
 class GitController extends Controller
 {
-    /**
-     * Get git information for an installation.
-     */
-    public function info(Installation $installation): JsonResponse
-    {
-        $env = HerdEnvironment::env();
-        $path = $installation->path;
-        $suppress = HerdEnvironment::suppressStderr();
-
-        $isGitRepo = Process::path($path)->env($env)->timeout(5)
-            ->run("git rev-parse --is-inside-work-tree {$suppress}");
-
-        if (! $isGitRepo->successful()) {
-            return response()->json(['is_git_repo' => false]);
-        }
-
-        $branch = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git branch --show-current')->output());
-
-        $remoteUrl = trim(Process::path($path)->env($env)->timeout(5)
-            ->run("git remote get-url origin {$suppress}")->output());
-
-        $hasChanges = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git status --porcelain')->output()) !== '';
-
-        $lastCommit = trim(Process::path($path)->env($env)->timeout(5)
-            ->run("git log --oneline -1 {$suppress}")->output());
-
-        $defaultBranch = $this->detectDefaultBranch($path, $env);
-
-        $hasOpenPr = false;
-
-        if ($branch !== $defaultBranch) {
-            $prCheck = Process::path($path)->env($env)->timeout(10)
-                ->run(sprintf("gh pr view %s --json state {$suppress}", escapeshellarg($branch)));
-
-            if ($prCheck->successful()) {
-                /** @var array{state: string}|null $prData */
-                $prData = json_decode(trim($prCheck->output()), true);
-                $hasOpenPr = ($prData['state'] ?? '') === 'OPEN';
-            }
-        }
-
-        return response()->json([
-            'is_git_repo' => true,
-            'branch' => $branch,
-            'remote_url' => $remoteUrl,
-            'has_changes' => $hasChanges,
-            'last_commit' => $lastCommit,
-            'is_main_branch' => $branch === $defaultBranch,
-            'default_branch' => $defaultBranch,
-            'has_open_pr' => $hasOpenPr,
-        ]);
-    }
-
     /**
      * List all local branches for an installation.
      */
     public function branches(Installation $installation): JsonResponse
     {
-        $env = HerdEnvironment::env();
-        $path = $installation->path;
-
-        $result = Process::path($path)->env($env)->timeout(5)
-            ->run('git branch --format="%(refname:short)"');
-
-        if (! $result->successful()) {
-            return response()->json(['branches' => []]);
-        }
-
-        $branches = array_filter(array_map('trim', explode("\n", trim($result->output()))));
-
-        return response()->json(['branches' => array_values($branches)]);
+        return response()->json([
+            'branches' => (new GitRepository($installation->path))->branches(),
+        ]);
     }
 
     /**
@@ -89,27 +23,22 @@ class GitController extends Controller
      */
     public function switchBranch(Installation $installation): JsonResponse
     {
-        $env = HerdEnvironment::env();
-        $path = $installation->path;
         $branch = request()->input('branch');
 
         if (! $branch) {
             return response()->json(['success' => false, 'error' => 'No branch specified'], 422);
         }
 
-        // Check for uncommitted changes
-        $hasChanges = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git status --porcelain')->output()) !== '';
+        $repository = new GitRepository($installation->path);
 
-        if ($hasChanges) {
+        if ($repository->hasUncommittedChanges()) {
             return response()->json([
                 'success' => false,
                 'error' => 'Cannot switch branch with uncommitted changes. Commit or stash first.',
             ], 422);
         }
 
-        $result = Process::path($path)->env($env)->timeout(15)
-            ->run(sprintf('git checkout %s', escapeshellarg($branch)));
+        $result = $repository->checkout($branch);
 
         if (! $result->successful()) {
             return response()->json([
@@ -118,8 +47,7 @@ class GitController extends Controller
             ], 422);
         }
 
-        // Pull latest after checkout
-        Process::path($path)->env($env)->timeout(30)->run('git pull');
+        $repository->pull();
 
         return response()->json(['success' => true, 'branch' => $branch]);
     }
@@ -131,10 +59,7 @@ class GitController extends Controller
     {
         $branch = request()->input('branch', 'develop');
 
-        $result = Process::path($installation->path)
-            ->env(HerdEnvironment::env())
-            ->timeout(15)
-            ->run(sprintf('git checkout -b %s', escapeshellarg($branch)));
+        $result = (new GitRepository($installation->path))->createBranch($branch);
 
         if ($result->successful()) {
             return response()->json(['success' => true, 'branch' => $branch]);
@@ -147,38 +72,90 @@ class GitController extends Controller
     }
 
     /**
+     * Bring the current branch up to date with the default branch.
+     *
+     * Fetches first so the comparison is made against the real remote state,
+     * refuses to touch a dirty work tree, and rolls back cleanly if the merge
+     * runs into conflicts.
+     */
+    public function syncWithDefault(Installation $installation): JsonResponse
+    {
+        $repository = new GitRepository($installation->path);
+
+        $branch = $repository->currentBranch();
+        $defaultBranch = $repository->defaultBranch();
+
+        if ($repository->hasUncommittedChanges()) {
+            return response()->json([
+                'success' => false,
+                'error' => "Commit or stash your changes before updating from {$defaultBranch}.",
+            ], 422);
+        }
+
+        // Never compare against a stale remote ref
+        $repository->fetchAllRemotes();
+
+        $behind = $repository->commitsBehindDefault($branch, $defaultBranch);
+
+        if ($behind === 0) {
+            return response()->json([
+                'success' => true,
+                'updated' => false,
+                'message' => "Already up to date with {$defaultBranch}.",
+            ]);
+        }
+
+        $merge = $repository->mergeDefaultBranch($defaultBranch);
+
+        if (! $merge->successful()) {
+            // Leave the work tree exactly as it was before the attempt
+            $repository->abortMerge();
+
+            return response()->json([
+                'success' => false,
+                'error' => "{$defaultBranch} could not be merged into {$branch} automatically. Resolve the conflicts manually. Nothing was changed.",
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'updated' => true,
+            'message' => $behind === 1
+                ? "Merged 1 commit from {$defaultBranch}."
+                : "Merged {$behind} commits from {$defaultBranch}.",
+        ]);
+    }
+
+    /**
      * Create a pull request to the default branch.
      */
     public function createPr(Installation $installation): JsonResponse
     {
-        $env = HerdEnvironment::env();
-        $path = $installation->path;
+        $repository = new GitRepository($installation->path);
 
-        $branch = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git branch --show-current')->output());
+        $branch = $repository->currentBranch();
+        $defaultBranch = $repository->defaultBranch();
 
-        $defaultBranch = $this->detectDefaultBranch($path, $env);
+        if ($branch === $defaultBranch) {
+            return response()->json([
+                'success' => false,
+                'error' => "Already on {$defaultBranch}. Switch to another branch to open a pull request.",
+            ], 422);
+        }
 
-        $lastCommitMsg = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git log --format=%s -1')->output());
+        if ($repository->commitsAheadOfDefault($branch, $defaultBranch) === 0) {
+            return response()->json([
+                'success' => false,
+                'error' => "No commits ahead of {$defaultBranch}. There is nothing to merge.",
+            ], 422);
+        }
 
-        $title = $lastCommitMsg ?: "Merge {$branch} into {$defaultBranch}";
+        $title = $repository->lastCommitSubject() ?: "Merge {$branch} into {$defaultBranch}";
 
-        $result = Process::path($path)
-            ->env($env)
-            ->timeout(30)
-            ->run(sprintf(
-                'gh pr create --base %s --head %s --title %s --body %s',
-                escapeshellarg($defaultBranch),
-                escapeshellarg($branch),
-                escapeshellarg($title),
-                escapeshellarg(''),
-            ));
+        $result = $repository->createPullRequest($defaultBranch, $branch, $title);
 
         if ($result->successful()) {
-            $prUrl = trim($result->output());
-
-            return response()->json(['success' => true, 'pr_url' => $prUrl]);
+            return response()->json(['success' => true, 'pr_url' => trim($result->output())]);
         }
 
         $error = trim($result->errorOutput().$result->output());
@@ -200,95 +177,65 @@ class GitController extends Controller
     }
 
     /**
+     * Report whether the pull request for the current branch is ready to merge.
+     */
+    public function prStatus(Installation $installation): JsonResponse
+    {
+        $repository = new GitRepository($installation->path);
+
+        return response()->json([
+            'pull_request' => $repository->pullRequestStatus($repository->currentBranch()),
+        ]);
+    }
+
+    /**
      * Merge an open pull request for the current branch.
      */
     public function mergePr(Installation $installation): JsonResponse
     {
-        $env = HerdEnvironment::env();
-        $path = $installation->path;
+        $repository = new GitRepository($installation->path);
 
-        $branch = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git branch --show-current')->output());
+        $branch = $repository->currentBranch();
+        $pullRequest = $repository->pullRequestStatus($branch);
 
-        $prCheck = Process::path($path)
-            ->env($env)
-            ->timeout(15)
-            ->run(sprintf('gh pr view %s --json mergeable,url,state', escapeshellarg($branch)));
-
-        if (! $prCheck->successful()) {
+        if ($pullRequest === null) {
             return response()->json([
                 'success' => false,
                 'error' => 'No open pull request found for this branch.',
             ], 422);
         }
 
-        /** @var array{mergeable: string, url: string, state: string} $prData */
-        $prData = json_decode(trim($prCheck->output()), true);
-
-        if (($prData['mergeable'] ?? '') === 'CONFLICTING') {
+        // Re-check right before merging, in case the dashboard state is stale
+        if (! $pullRequest['ready']) {
             return response()->json([
                 'success' => false,
-                'has_conflicts' => true,
-                'pr_url' => $prData['url'] ?? null,
-                'error' => 'This pull request has merge conflicts. Please resolve them on GitHub.',
+                'pr_state' => $pullRequest['state'],
+                'pr_url' => $pullRequest['url'],
+                'error' => $pullRequest['reason'],
             ], 422);
         }
 
-        $mergeResult = Process::path($path)
-            ->env($env)
-            ->timeout(30)
-            ->run(sprintf('gh pr merge %s --merge', escapeshellarg($branch)));
+        $mergeResult = $repository->mergePullRequest($branch);
 
-        if ($mergeResult->successful()) {
+        if (! $mergeResult->successful()) {
             return response()->json([
-                'success' => true,
-                'merged' => true,
-                'pr_url' => $prData['url'] ?? null,
-            ]);
+                'success' => false,
+                'error' => trim($mergeResult->errorOutput()),
+                'pr_url' => $pullRequest['url'],
+            ], 422);
         }
+
+        // Bring the local default branch up to date without leaving the current branch
+        $defaultBranch = $repository->defaultBranch();
+        $fastForwarded = $repository->fastForwardFromOrigin($defaultBranch);
 
         return response()->json([
-            'success' => false,
-            'error' => trim($mergeResult->errorOutput()),
-            'pr_url' => $prData['url'] ?? null,
-        ], 422);
-    }
-
-    /**
-     * Detect the default branch for a repository.
-     *
-     * @param  array<string, string>  $env
-     */
-    private function detectDefaultBranch(string $path, array $env): string
-    {
-        $suppress = HerdEnvironment::suppressStderr();
-
-        // GitHub CLI is authoritative for the default branch
-        $ghResult = Process::path($path)->env($env)->timeout(10)
-            ->run("gh repo view --json defaultBranchRef -q .defaultBranchRef.name {$suppress}");
-
-        if ($ghResult->successful() && trim($ghResult->output()) !== '') {
-            return trim($ghResult->output());
-        }
-
-        // Fall back to git symbolic-ref (may be stale)
-        $result = Process::path($path)->env($env)->timeout(5)
-            ->run("git symbolic-ref refs/remotes/origin/HEAD {$suppress}");
-
-        if ($result->successful()) {
-            $ref = trim($result->output());
-
-            return str_replace('refs/remotes/origin/', '', $ref);
-        }
-
-        // Final fallback: check branch names
-        $branches = trim(Process::path($path)->env($env)->timeout(5)
-            ->run('git branch -a')->output());
-
-        if (str_contains($branches, 'main')) {
-            return 'main';
-        }
-
-        return 'master';
+            'success' => true,
+            'merged' => true,
+            'pr_url' => $pullRequest['url'],
+            'warning' => $fastForwarded
+                ? null
+                : "Local {$defaultBranch} could not be updated automatically. It has diverged from origin/{$defaultBranch}.",
+        ]);
     }
 }
