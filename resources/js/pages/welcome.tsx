@@ -1,6 +1,6 @@
 import { Head, router, usePoll } from '@inertiajs/react';
 import { CloudDownload, RefreshCw, Search, Upload } from 'lucide-react';
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import InstallationRow from '@/components/installation-row';
 import type { Installation } from '@/components/installation-row';
 import InstallationsRail from '@/components/installations-rail';
@@ -142,11 +142,14 @@ export default function Welcome({
 
     const { stop, start } = usePoll(2000, {}, { autoStart: false });
 
-    if (hasRecentStatus) {
-        start();
-    } else {
-        stop();
-    }
+    // Only poll while a background job is in flight
+    useEffect(() => {
+        if (hasRecentStatus) {
+            start();
+        } else {
+            stop();
+        }
+    }, [hasRecentStatus, start, stop]);
 
     function handleViewChange(next: ViewKey) {
         setSelected([]);

@@ -9,6 +9,18 @@ use Illuminate\Http\JsonResponse;
 class GitController extends Controller
 {
     /**
+     * The requested branch name, or null when none was given.
+     */
+    private function branchName(): ?string
+    {
+        $validated = request()->validate([
+            'branch' => ['nullable', 'string', 'max:255'],
+        ]);
+
+        return trim($validated['branch'] ?? '') ?: null;
+    }
+
+    /**
      * List all local branches for an installation.
      */
     public function branches(Installation $installation): JsonResponse
@@ -23,9 +35,9 @@ class GitController extends Controller
      */
     public function switchBranch(Installation $installation): JsonResponse
     {
-        $branch = request()->input('branch');
+        $branch = $this->branchName();
 
-        if (! $branch) {
+        if ($branch === null) {
             return response()->json(['success' => false, 'error' => 'No branch specified'], 422);
         }
 
@@ -57,7 +69,7 @@ class GitController extends Controller
      */
     public function createBranch(Installation $installation): JsonResponse
     {
-        $branch = request()->input('branch', 'develop');
+        $branch = $this->branchName() ?? 'develop';
 
         $result = (new GitRepository($installation->path))->createBranch($branch);
 

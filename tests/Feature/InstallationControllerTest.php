@@ -17,6 +17,8 @@ function fakeSyncFor(iterable $installations = []): void
     $real = app(Filesystem::class);
 
     File::partialMock()
+        ->shouldReceive('isDirectory')
+        ->andReturn(true)
         ->shouldReceive('directories')
         ->andReturn($paths)
         ->shouldReceive('exists')
@@ -71,6 +73,20 @@ it('shows hidden installations when requested', function () {
             ->has('installations', 3)
             ->where('showHidden', true)
         );
+});
+
+it('keeps known installations when the Herd directory is unavailable', function () {
+    Installation::factory()->count(2)->create();
+
+    File::partialMock()
+        ->shouldReceive('isDirectory')
+        ->andReturn(false)
+        ->shouldReceive('directories')
+        ->never();
+
+    $this->get(route('home'))
+        ->assertSuccessful()
+        ->assertInertia(fn ($page) => $page->has('installations', 2));
 });
 
 it('auto-resets completed installations after 10 seconds', function () {

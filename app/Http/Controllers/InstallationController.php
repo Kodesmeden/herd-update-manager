@@ -47,7 +47,7 @@ class InstallationController extends Controller
     private function herdPathForDisplay(): string
     {
         $herdPath = (string) config('herd.path');
-        $home = (string) (getenv('HOME') ?: getenv('USERPROFILE'));
+        $home = HerdEnvironment::home();
 
         if ($home !== '' && str_starts_with($herdPath, $home)) {
             return '~'.substr($herdPath, strlen($home));
@@ -148,7 +148,7 @@ class InstallationController extends Controller
      */
     public function push(Installation $installation): RedirectResponse
     {
-        $message = request()->input('message', 'Update packages');
+        $message = $this->commitMessage();
         $installation->update(['status' => 'pushing', 'progress' => 0, 'current_step' => null, 'output' => null]);
         $this->startBackgroundCommand($installation, 'app:push-installation --message='.escapeshellarg($message));
 
@@ -160,7 +160,7 @@ class InstallationController extends Controller
      */
     public function pushAll(): RedirectResponse
     {
-        $message = request()->input('message', 'Update packages');
+        $message = $this->commitMessage();
 
         $installations = Installation::query()
             ->where('hidden', false)
@@ -195,6 +195,18 @@ class InstallationController extends Controller
     }
 
     /**
+     * The commit message for a push request, falling back to the default.
+     */
+    private function commitMessage(): string
+    {
+        $validated = request()->validate([
+            'message' => ['nullable', 'string', 'max:200'],
+        ]);
+
+        return trim($validated['message'] ?? '') ?: 'Update packages';
+    }
+
+    /**
      * Start an artisan command as a background process for an installation.
      */
     private function startBackgroundCommand(Installation $installation, string $command): void
@@ -212,15 +224,23 @@ class InstallationController extends Controller
      */
     private function syncInstallations(): void
     {
-        $directories = collect(File::directories(config('herd.path')))
+        $herdPath = (string) config('herd.path');
+
+        // Scanning a missing directory throws, and every installation would
+        // otherwise look deleted just because the path was unavailable
+        if (! File::isDirectory($herdPath)) {
+            return;
+        }
+
+        $directories = collect(File::directories($herdPath))
             ->map(fn (string $path) => basename($path))
             ->filter(fn (string $name) => $name !== 'update')
-            ->filter(fn (string $name) => File::exists(config('herd.path').'/'.$name.'/artisan'))
+            ->filter(fn (string $name) => File::exists($herdPath.'/'.$name.'/artisan'))
             ->values();
 
         foreach ($directories as $name) {
             Installation::query()->firstOrCreate(
-                ['path' => config('herd.path').'/'.$name],
+                ['path' => $herdPath.'/'.$name],
                 ['name' => $name],
             );
         }
