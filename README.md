@@ -14,6 +14,7 @@ A web dashboard for managing updates across all your Laravel projects running on
 ## Requirements
 
 - [Laravel Herd](https://herd.laravel.com) (macOS or Windows)
+- PHP 8.4 or newer, selected for the site in Herd
 - Composer
 - [GitHub CLI](https://cli.github.com) (optional, only needed for pull request features)
 

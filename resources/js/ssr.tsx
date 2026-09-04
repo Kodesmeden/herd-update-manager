@@ -1,4 +1,5 @@
 import { createInertiaApp } from '@inertiajs/react';
+import type { ResolvedComponent } from '@inertiajs/react';
 import createServer from '@inertiajs/react/server';
 import { resolvePageComponent } from 'laravel-vite-plugin/inertia-helpers';
 import ReactDOMServer from 'react-dom/server';
@@ -14,8 +15,10 @@ createServer((page) =>
         resolve: (name) =>
             resolvePageComponent(
                 `./pages/${name}.tsx`,
-                import.meta.glob('./pages/**/*.tsx'),
-            ),
+                import.meta.glob<{ default: ResolvedComponent }>(
+                    './pages/**/*.tsx',
+                ),
+            ).then((page) => page.default),
         setup: ({ App, props }) => {
             return (
                 <TooltipProvider delayDuration={0}>

@@ -15,14 +15,7 @@ type CheckResult = {
     checked_at?: string;
 } | null;
 type CheckKey =
-    | 'git'
-    | 'gh'
-    | 'gh-auth'
-    | 'ssh'
-    | 'composer'
-    | 'php'
-    | 'node'
-    | 'npm';
+    'git' | 'gh' | 'gh-auth' | 'ssh' | 'composer' | 'php' | 'node' | 'npm';
 
 const checks: { key: CheckKey; label: string }[] = [
     { key: 'php', label: 'PHP' },
