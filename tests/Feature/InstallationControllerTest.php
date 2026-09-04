@@ -150,6 +150,10 @@ it('sets status to running when triggering update', function () {
     expect($installation->fresh())
         ->status->toBe('running')
         ->progress->toBe(0);
+
+    expect($this->backgroundCommands())->toBe([
+        ['command' => 'app:update-installation', 'installation_id' => $installation->id],
+    ]);
 });
 
 it('sets status to pushing when triggering push', function () {
@@ -161,6 +165,23 @@ it('sets status to pushing when triggering push', function () {
     expect($installation->fresh())
         ->status->toBe('pushing')
         ->progress->toBe(0);
+
+    expect($this->backgroundCommands())->toBe([
+        [
+            'command' => "app:push-installation --message='Test commit'",
+            'installation_id' => $installation->id,
+        ],
+    ]);
+});
+
+it('escapes the commit message before handing it to the shell', function () {
+    $installation = Installation::factory()->create();
+
+    $this->post(route('installations.push', $installation), ['message' => "it's a 'quoted' one"])
+        ->assertRedirect();
+
+    expect($this->backgroundCommands()[0]['command'])
+        ->toBe("app:push-installation --message='it'\\''s a '\\''quoted'\\'' one'");
 });
 
 it('sets all visible installations to running on update all', function () {
@@ -175,6 +196,10 @@ it('sets all visible installations to running on update all', function () {
     }
 
     expect($hidden->fresh())->status->toBe('idle');
+
+    expect($this->backgroundCommands())
+        ->toHaveCount(3)
+        ->each->toMatchArray(['command' => 'app:update-installation']);
 });
 
 it('sets all visible installations to pushing on push all', function () {
@@ -189,6 +214,10 @@ it('sets all visible installations to pushing on push all', function () {
     }
 
     expect($hidden->fresh())->status->toBe('idle');
+
+    expect($this->backgroundCommands())
+        ->toHaveCount(2)
+        ->each->toMatchArray(['command' => "app:push-installation --message='Batch push'"]);
 });
 
 /**

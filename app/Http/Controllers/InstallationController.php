@@ -3,6 +3,7 @@
 namespace App\Http\Controllers;
 
 use App\Models\Installation;
+use App\Support\BackgroundCommand;
 use App\Support\GitRepository;
 use App\Support\HerdEnvironment;
 use Illuminate\Http\JsonResponse;
@@ -13,6 +14,8 @@ use Inertia\Response;
 
 class InstallationController extends Controller
 {
+    public function __construct(private readonly BackgroundCommand $background) {}
+
     /**
      * List all Herd installations, syncing with filesystem.
      */
@@ -211,12 +214,7 @@ class InstallationController extends Controller
      */
     private function startBackgroundCommand(Installation $installation, string $command): void
     {
-        $php = HerdEnvironment::phpBin();
-        $artisan = base_path('artisan');
-
-        // Raw exec() is used intentionally to detach the process.
-        // Laravel's Process facade does not support fire-and-forget background execution.
-        exec(HerdEnvironment::backgroundExecCommand($php, $artisan, $command, $installation->id));
+        $this->background->start($command, $installation->id);
     }
 
     /**
