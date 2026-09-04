@@ -21,12 +21,12 @@ class GitRepository
         'unstable' => 'Some checks are failing',
     ];
 
-    /** @var array<string, string> */
+    /** @var array<string, string|false> */
     private readonly array $env;
 
     public function __construct(private readonly string $path)
     {
-        $this->env = HerdEnvironment::env();
+        $this->env = HerdEnvironment::projectEnv();
     }
 
     /**

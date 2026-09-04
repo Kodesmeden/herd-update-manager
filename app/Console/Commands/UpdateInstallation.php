@@ -45,7 +45,7 @@ class UpdateInstallation extends Command
         ]);
 
         $output = '';
-        $env = ['PATH' => HerdEnvironment::path()];
+        $env = HerdEnvironment::projectEnv();
 
         foreach ($this->steps($installation->path) as $step) {
             $installation->update([

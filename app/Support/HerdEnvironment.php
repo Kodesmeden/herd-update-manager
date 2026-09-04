@@ -71,6 +71,47 @@ class HerdEnvironment
     }
 
     /**
+     * Build the environment for a command that runs inside a managed project.
+     *
+     * Laravel exports this application's own .env into getenv(), $_ENV and
+     * $_SERVER, and child processes inherit all three. The target project's
+     * Dotenv is immutable, so it cannot override a variable it already finds
+     * set: a project on MySQL would run `artisan` against this application's
+     * sqlite connection. Removing every key this .env defines lets the
+     * project's own .env win. Symfony drops a variable set to false.
+     *
+     * @return array<string, string|false>
+     */
+    public static function projectEnv(): array
+    {
+        $env = self::env();
+
+        foreach (self::ownEnvKeys() as $key) {
+            $env[$key] ??= false;
+        }
+
+        return $env;
+    }
+
+    /**
+     * The variable names this application's own .env file defines.
+     *
+     * @return array<int, string>
+     */
+    private static function ownEnvKeys(): array
+    {
+        $file = base_path('.env');
+
+        if (! is_file($file)) {
+            return [];
+        }
+
+        preg_match_all('/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=/m', (string) file_get_contents($file), $matches);
+
+        return $matches[1];
+    }
+
+    /**
      * Get the Herd PHP binary path.
      */
     public static function phpBin(): string

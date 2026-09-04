@@ -76,3 +76,19 @@ it('runs exactly composer update, npm update, npm run build and optimize:clear',
     Process::assertDidntRun(fn ($process) => str_contains($process->command, 'config:clear'));
     Process::assertDidntRun(fn ($process) => str_contains($process->command, 'route:clear'));
 });
+
+it('does not leak this application\'s database config into the project', function () {
+    Process::fake(['*' => Process::result('ok')]);
+
+    $installation = Installation::factory()->create();
+
+    $this->artisan('app:update-installation', ['id' => $installation->id])
+        ->assertSuccessful();
+
+    // A project on MySQL would otherwise inherit this app's sqlite connection
+    // and run artisan against the wrong database
+    Process::assertRan(fn ($process) => str_ends_with($process->command, 'artisan optimize:clear')
+        && $process->environment['DB_CONNECTION'] === false
+        && $process->environment['APP_KEY'] === false
+        && $process->environment['PATH'] !== false);
+});
