@@ -5,6 +5,7 @@ use Illuminate\Support\Facades\Process;
 
 it('commits and pushes successfully', function () {
     Process::fake([
+        'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}*' => Process::result('origin/main'),
         'git pull --rebase' => Process::result('Already up to date.'),
         'git add --all' => Process::result(''),
         'git status --porcelain' => Process::result('M composer.lock'),
@@ -26,6 +27,7 @@ it('commits and pushes successfully', function () {
 
 it('skips commit when there are no changes', function () {
     Process::fake([
+        'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}*' => Process::result('origin/main'),
         'git pull --rebase' => Process::result('Already up to date.'),
         'git add --all' => Process::result(''),
         'git status --porcelain' => Process::result(''),
@@ -42,6 +44,7 @@ it('skips commit when there are no changes', function () {
 
 it('fails when git pull fails', function () {
     Process::fake([
+        'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}*' => Process::result('origin/main'),
         'git add --all' => Process::result(''),
         'git status --porcelain' => Process::result('M composer.lock'),
         'git commit*' => Process::result('1 file changed'),
@@ -60,6 +63,7 @@ it('fails when git pull fails', function () {
 
 it('treats everything up-to-date push as success', function () {
     Process::fake([
+        'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}*' => Process::result('origin/main'),
         'git pull --rebase' => Process::result('Already up to date.'),
         'git add --all' => Process::result(''),
         'git status --porcelain' => Process::result(''),
@@ -76,6 +80,7 @@ it('treats everything up-to-date push as success', function () {
 
 it('fails when push fails', function () {
     Process::fake([
+        'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}*' => Process::result('origin/main'),
         'git pull --rebase' => Process::result('ok'),
         'git add --all' => Process::result(''),
         'git status --porcelain' => Process::result(''),
@@ -88,4 +93,28 @@ it('fails when push fails', function () {
         ->assertFailed();
 
     expect($installation->fresh())->status->toBe('failed');
+});
+
+it('publishes a branch that has no upstream instead of failing on the pull', function () {
+    Process::fake([
+        'git rev-parse --abbrev-ref --symbolic-full-name @{upstream}*' => Process::result(
+            output: '', errorOutput: 'fatal: no upstream configured', exitCode: 1,
+        ),
+        'git branch --show-current*' => Process::result('develop'),
+        'git add --all' => Process::result(''),
+        'git status --porcelain' => Process::result('M composer.lock'),
+        'git commit*' => Process::result('1 file changed'),
+        'git push --set-upstream origin*' => Process::result('branch develop set up to track origin/develop'),
+    ]);
+
+    $installation = Installation::factory()->create();
+
+    $this->artisan('app:push-installation', ['id' => $installation->id])
+        ->assertSuccessful();
+
+    expect($installation->fresh())->status->toBe('completed');
+
+    // Rebasing without tracking information is what used to abort the push
+    Process::assertDidntRun('git pull --rebase');
+    Process::assertRan(fn ($process) => str_contains($process->command, "git push --set-upstream origin 'develop'"));
 });

@@ -304,11 +304,30 @@ class GitRepository
     }
 
     /**
+     * Check whether the current branch tracks a remote branch.
+     */
+    public function hasUpstream(): bool
+    {
+        return $this->run('git rev-parse --abbrev-ref --symbolic-full-name @{upstream}', quiet: true)->successful();
+    }
+
+    /**
      * Push the current branch to its remote.
      */
     public function push(): ProcessResult
     {
         return $this->run('git push', timeout: 60);
+    }
+
+    /**
+     * Push a branch that has no upstream yet and start tracking origin.
+     */
+    public function pushSetUpstream(string $branch): ProcessResult
+    {
+        return $this->run(
+            sprintf('git push --set-upstream origin %s', escapeshellarg($branch)),
+            timeout: 60,
+        );
     }
 
     /**

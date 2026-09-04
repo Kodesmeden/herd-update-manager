@@ -46,19 +46,27 @@ class PushInstallation extends Command
             }
         }
 
-        // Pull latest changes before pushing (after commit so rebase works)
-        $installation->update(['current_step' => 'Git pull']);
-        $pullResult = $repository->pullRebase();
-        $output .= $pullResult->output().$pullResult->errorOutput();
+        // A branch created locally has no upstream yet. There is nothing to pull,
+        // and git refuses to rebase without tracking information.
+        $hasUpstream = $repository->hasUpstream();
 
-        if (! $pullResult->successful()) {
-            return $this->markFailed($installation, $output);
+        if ($hasUpstream) {
+            // Pull latest changes before pushing (after commit so rebase works)
+            $installation->update(['current_step' => 'Git pull']);
+            $pullResult = $repository->pullRebase();
+            $output .= $pullResult->output().$pullResult->errorOutput();
+
+            if (! $pullResult->successful()) {
+                return $this->markFailed($installation, $output);
+            }
         }
 
         // Push
         $installation->update(['current_step' => 'Git push']);
 
-        $pushResult = $repository->push();
+        $pushResult = $hasUpstream
+            ? $repository->push()
+            : $repository->pushSetUpstream($repository->currentBranch());
         $output .= $pushResult->output().$pushResult->errorOutput();
 
         if (! $pushResult->successful()) {
