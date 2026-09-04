@@ -68,7 +68,7 @@ it('runs exactly composer update, npm update, npm run build and optimize:clear',
         ->assertSuccessful();
 
     Process::assertRan('composer update');
-    Process::assertRan('npm update');
+    Process::assertRan('npm update --no-audit --no-fund');
     Process::assertRan('npm run build');
     Process::assertRan(fn ($process) => str_ends_with($process->command, 'artisan optimize:clear'));
 

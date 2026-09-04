@@ -22,7 +22,9 @@ class UpdateInstallation extends Command
 
         return [
             ['command' => 'composer update', 'label' => 'Composer update', 'progress' => 25],
-            ['command' => 'npm update', 'label' => 'NPM update', 'progress' => 50, 'env' => ['PUPPETEER_SKIP_DOWNLOAD' => 'true']],
+            // --no-audit skips a registry call that regularly stalls for minutes
+            // and whose output this command does not use anyway
+            ['command' => 'npm update --no-audit --no-fund', 'label' => 'NPM update', 'progress' => 50, 'env' => ['PUPPETEER_SKIP_DOWNLOAD' => 'true']],
             ['command' => 'npm run build', 'label' => 'Build assets', 'progress' => 75],
             ['command' => "php {$artisan} optimize:clear", 'label' => 'Clear caches', 'progress' => 100],
         ];
