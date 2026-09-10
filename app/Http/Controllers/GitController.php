@@ -155,10 +155,31 @@ class GitController extends Controller
             ], 422);
         }
 
+        // GitHub compares the pushed branches, so a stale remote-tracking ref
+        // would let a branch look ahead of a default branch that already has its commits
+        $repository->fetchRemoteBranch($defaultBranch);
+
         if ($repository->commitsAheadOfDefault($branch, $defaultBranch) === 0) {
             return response()->json([
                 'success' => false,
                 'error' => "No commits ahead of {$defaultBranch}. There is nothing to merge.",
+            ], 422);
+        }
+
+        // Unpushed commits are invisible to GitHub, which would reject the
+        // pull request for having no commits between the two branches. Always
+        // setting the upstream targets origin/<branch> even when the branch
+        // tracks something else, and is a no-op once it is already pushed.
+        $push = $repository->pushSetUpstream($branch);
+
+        if (! $push->successful()) {
+            $pushError = trim($push->errorOutput().$push->output());
+
+            return response()->json([
+                'success' => false,
+                'error' => str_contains($pushError, '[rejected]')
+                    ? "origin/{$branch} has commits that are not in your local branch. Pull before opening a pull request."
+                    : "Could not push {$branch} to origin. ".$pushError,
             ], 422);
         }
 

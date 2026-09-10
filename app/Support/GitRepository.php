@@ -355,6 +355,17 @@ class GitRepository
     }
 
     /**
+     * Update the remote-tracking ref for a branch without touching the local branch.
+     */
+    public function fetchRemoteBranch(string $branch): ProcessResult
+    {
+        return $this->run(sprintf(
+            'git fetch origin %s',
+            escapeshellarg($branch),
+        ), timeout: 60, quiet: true);
+    }
+
+    /**
      * Fast-forward a local branch from origin without checking it out.
      *
      * Fails when the local branch has diverged from the remote.

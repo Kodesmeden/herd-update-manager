@@ -21,6 +21,7 @@ function fakeRepositoryOn(string $branch, string $defaultBranch = 'main', array 
         'git log --format=%s*' => Process::result('Update packages'),
         'git fetch --all --prune' => Process::result(''),
         'git fetch origin*' => Process::result(''),
+        'git push*' => Process::result('Everything up-to-date'),
         'git merge --abort*' => Process::result(''),
         'git merge*' => Process::result('Fast-forward'),
     ], $overrides);
@@ -82,6 +83,67 @@ it('creates a pull request when the branch is ahead of the default branch', func
         ->assertSuccessful()
         ->assertJsonPath('success', true)
         ->assertJsonPath('pr_url', 'https://github.com/acme/site/pull/7');
+});
+
+it('refreshes the remote default branch before counting commits ahead', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git rev-list --count*' => Process::result('2'),
+        'gh pr create*' => Process::result('https://github.com/acme/site/pull/7'),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation))->assertSuccessful();
+
+    Process::assertRan(fn ($process) => str_starts_with($process->command, "git fetch origin 'main'"));
+});
+
+it('pushes the branch to its own remote branch before creating the pull request', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git rev-list --count*' => Process::result('2'),
+        'gh pr create*' => Process::result('https://github.com/acme/site/pull/7'),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation))->assertSuccessful();
+
+    Process::assertRan(fn ($process) => $process->command === "git push --set-upstream origin 'develop'");
+});
+
+it('reports a failed push instead of opening a pull request', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git rev-list --count*' => Process::result('2'),
+        'git push*' => Process::result(output: '', errorOutput: 'fatal: could not read from remote', exitCode: 1),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation))
+        ->assertStatus(422)
+        ->assertJsonPath('success', false)
+        ->assertJsonPath('error', 'Could not push develop to origin. fatal: could not read from remote');
+
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'gh pr create'));
+});
+
+it('explains a rejected push instead of returning raw git output', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git rev-list --count*' => Process::result('2'),
+        'git push*' => Process::result(
+            output: '',
+            errorOutput: ' ! [rejected] develop -> develop (fetch first)',
+            exitCode: 1,
+        ),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation))
+        ->assertStatus(422)
+        ->assertJsonPath('error', 'origin/develop has commits that are not in your local branch. Pull before opening a pull request.');
+
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'gh pr create'));
 });
 
 it('compares against the remote default branch when it is available', function () {
@@ -305,4 +367,160 @@ it('ignores merge commits when counting how far a branch has drifted', function 
     Process::assertRan(fn ($process) => str_contains($process->command, 'git rev-list --count --no-merges'));
     Process::assertDidntRun(fn ($process) => str_contains($process->command, 'git rev-list --count')
         && ! str_contains($process->command, '--no-merges'));
+});
+
+it('lists the local branches of the installation', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result("develop\nmain\nfeature/checkout\n"),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->getJson(route('installations.git.branches', $installation))
+        ->assertSuccessful()
+        ->assertExactJson(['branches' => ['develop', 'main', 'feature/checkout']]);
+});
+
+it('returns an empty branch list when git cannot read the repository', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result(output: '', exitCode: 128),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->getJson(route('installations.git.branches', $installation))
+        ->assertSuccessful()
+        ->assertExactJson(['branches' => []]);
+});
+
+it('refuses with 422 to switch branch when no branch is given', function () {
+    Process::fake(fakeRepositoryOn('develop'));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.switch', $installation))
+        ->assertStatus(422)
+        ->assertJsonPath('success', false)
+        ->assertJsonPath('error', 'No branch specified');
+
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'git checkout'));
+});
+
+it('refuses with 422 to switch branch while the work tree is dirty', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git status --porcelain*' => Process::result(' M app/Models/Installation.php'),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.switch', $installation), ['branch' => 'main'])
+        ->assertStatus(422)
+        ->assertJsonPath('error', 'Cannot switch branch with uncommitted changes. Commit or stash first.');
+
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'git checkout'));
+});
+
+it('checks out the branch and pulls it when switching succeeds', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git checkout*' => Process::result("Switched to branch 'main'"),
+        'git pull*' => Process::result('Already up to date.'),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.switch', $installation), ['branch' => 'main'])
+        ->assertSuccessful()
+        ->assertExactJson(['success' => true, 'branch' => 'main']);
+
+    Process::assertRan(fn ($process) => str_starts_with($process->command, 'git checkout '));
+    Process::assertRan(fn ($process) => str_starts_with($process->command, 'git pull'));
+});
+
+it('reports the git error with 422 when the checkout fails', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git checkout*' => Process::result(
+            output: '',
+            errorOutput: "error: pathspec 'nope' did not match any file(s) known to git\n",
+            exitCode: 1,
+        ),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.switch', $installation), ['branch' => 'nope'])
+        ->assertStatus(422)
+        ->assertJsonPath('success', false)
+        ->assertJsonPath('error', "error: pathspec 'nope' did not match any file(s) known to git");
+
+    Process::assertDidntRun(fn ($process) => str_starts_with($process->command, 'git pull'));
+});
+
+it('creates the requested branch and switches to it', function () {
+    Process::fake(fakeRepositoryOn('main', overrides: [
+        'git checkout -b*' => Process::result("Switched to a new branch 'feature/checkout'"),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.branch', $installation), ['branch' => 'feature/checkout'])
+        ->assertSuccessful()
+        ->assertExactJson(['success' => true, 'branch' => 'feature/checkout']);
+
+    Process::assertRan(fn ($process) => $process->command === "git checkout -b 'feature/checkout'");
+});
+
+it('falls back to develop when creating a branch without a name', function () {
+    Process::fake(fakeRepositoryOn('main', overrides: [
+        'git checkout -b*' => Process::result("Switched to a new branch 'develop'"),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.branch', $installation))
+        ->assertSuccessful()
+        ->assertJsonPath('branch', 'develop');
+
+    Process::assertRan(fn ($process) => $process->command === "git checkout -b 'develop'");
+});
+
+it('reports the git error with 422 when the branch already exists', function () {
+    Process::fake(fakeRepositoryOn('main', overrides: [
+        'git checkout -b*' => Process::result(
+            output: '',
+            errorOutput: "fatal: a branch named 'develop' already exists\n",
+            exitCode: 128,
+        ),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.branch', $installation), ['branch' => 'develop'])
+        ->assertStatus(422)
+        ->assertJsonPath('success', false)
+        ->assertJsonPath('error', "fatal: a branch named 'develop' already exists");
+});
+
+it('rejects a branch name longer than 255 characters', function () {
+    Process::fake(fakeRepositoryOn('main'));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.switch', $installation), ['branch' => str_repeat('a', 256)])
+        ->assertStatus(422)
+        ->assertJsonValidationErrors('branch');
+
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'git checkout'));
+});
+
+it('escapes the branch name before handing it to the shell', function () {
+    Process::fake(fakeRepositoryOn('main', overrides: [
+        'git checkout*' => Process::result(''),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.branch', $installation), ['branch' => "x'; rm -rf /tmp; #"])
+        ->assertSuccessful();
+
+    Process::assertRan(fn ($process) => $process->command === "git checkout -b 'x'\\''; rm -rf /tmp; #'");
 });
