@@ -37,7 +37,12 @@ interface Props {
 type PushDialog =
     | { kind: 'one'; installation: Installation }
     | { kind: 'all' }
-    | { kind: 'selected'; ids: number[] };
+    | { kind: 'selected'; ids: number[] }
+    | {
+          kind: 'pr';
+          installation: Installation;
+          submit: (commitMessage: string) => void;
+      };
 
 const DEFAULT_COMMIT_MESSAGE = 'Update packages';
 
@@ -269,7 +274,9 @@ export default function Welcome({
             return;
         }
 
-        if (pushDialog.kind === 'one') {
+        if (pushDialog.kind === 'pr') {
+            pushDialog.submit(message);
+        } else if (pushDialog.kind === 'one') {
             router.post(
                 push.url(pushDialog.installation.id),
                 { message },
@@ -286,11 +293,13 @@ export default function Welcome({
     }
 
     const dialogTitle =
-        pushDialog?.kind === 'one'
-            ? `Push ${pushDialog.installation.name}`
-            : pushDialog?.kind === 'selected'
-              ? `Push ${pushDialog.ids.length} installations`
-              : 'Push all installations';
+        pushDialog?.kind === 'pr'
+            ? `Commit and open a PR for ${pushDialog.installation.name}`
+            : pushDialog?.kind === 'one'
+              ? `Push ${pushDialog.installation.name}`
+              : pushDialog?.kind === 'selected'
+                ? `Push ${pushDialog.ids.length} installations`
+                : 'Push all installations';
 
     return (
         <>
@@ -453,6 +462,13 @@ export default function Welcome({
                                             installation: inst,
                                         })
                                     }
+                                    onCreatePr={(inst, submit) =>
+                                        openPushDialog({
+                                            kind: 'pr',
+                                            installation: inst,
+                                            submit,
+                                        })
+                                    }
                                 />
                             ))}
 
@@ -511,7 +527,7 @@ export default function Welcome({
                             onClick={handleConfirmPush}
                             disabled={!commitMessage.trim()}
                         >
-                            Push
+                            {pushDialog?.kind === 'pr' ? 'Create PR' : 'Push'}
                         </Button>
                     </DialogFooter>
                 </DialogContent>

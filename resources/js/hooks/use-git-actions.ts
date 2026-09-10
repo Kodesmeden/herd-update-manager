@@ -276,7 +276,7 @@ export function useGitActions({
         setActionLoading(false);
     };
 
-    const handleCreatePr = async () => {
+    const handleCreatePr = async (commitMessage?: string) => {
         setActionLoading(true);
         setMessage(null);
 
@@ -287,13 +287,16 @@ export function useGitActions({
                     'Content-Type': 'application/json',
                     'X-XSRF-TOKEN': getCsrfToken(),
                 },
+                body: JSON.stringify({ message: commitMessage ?? null }),
             });
             const data = await res.json();
 
             if (data.success) {
                 setMessage({
                     type: 'success',
-                    text: 'PR created',
+                    text: data.committed
+                        ? 'Committed and PR created'
+                        : 'PR created',
                     url: data.pr_url,
                 });
                 setPolledPullRequest(undefined);

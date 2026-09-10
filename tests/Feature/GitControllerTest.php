@@ -85,6 +85,75 @@ it('creates a pull request when the branch is ahead of the default branch', func
         ->assertJsonPath('pr_url', 'https://github.com/acme/site/pull/7');
 });
 
+it('commits uncommitted changes before opening the pull request', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git status --porcelain*' => Process::result(' M composer.lock'),
+        'git rev-list --count*' => Process::result('1'),
+        'git add --all*' => Process::result(''),
+        'git commit*' => Process::result('1 file changed'),
+        'gh pr create*' => Process::result('https://github.com/acme/site/pull/7'),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation), ['message' => 'Bump packages'])
+        ->assertSuccessful()
+        ->assertJsonPath('committed', true);
+
+    Process::assertRan(fn ($process) => str_starts_with($process->command, 'git add --all'));
+    Process::assertRan(fn ($process) => $process->command === "git commit -m 'Bump packages'");
+    Process::assertRan(fn ($process) => str_contains($process->command, 'gh pr create'));
+});
+
+it('falls back to the default commit message when none is given', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git status --porcelain*' => Process::result(' M composer.lock'),
+        'git rev-list --count*' => Process::result('1'),
+        'git add --all*' => Process::result(''),
+        'git commit*' => Process::result('1 file changed'),
+        'gh pr create*' => Process::result('https://github.com/acme/site/pull/7'),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation))->assertSuccessful();
+
+    Process::assertRan(fn ($process) => $process->command === "git commit -m 'Update packages'");
+});
+
+it('does not commit when the work tree is clean', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git rev-list --count*' => Process::result('2'),
+        'gh pr create*' => Process::result('https://github.com/acme/site/pull/7'),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation))
+        ->assertSuccessful()
+        ->assertJsonPath('committed', false);
+
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'git commit'));
+});
+
+it('reports a failed commit without pushing or opening a pull request', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git status --porcelain*' => Process::result(' M composer.lock'),
+        'git rev-list --count*' => Process::result('1'),
+        'git add --all*' => Process::result(''),
+        'git commit*' => Process::result(output: '', errorOutput: 'Author identity unknown', exitCode: 1),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation))
+        ->assertStatus(422)
+        ->assertJsonPath('error', 'Could not commit the changes. Author identity unknown');
+
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'git push'));
+    Process::assertDidntRun(fn ($process) => str_contains($process->command, 'gh pr create'));
+});
+
 it('refreshes the remote default branch before counting commits ahead', function () {
     Process::fake(fakeRepositoryOn('develop', overrides: [
         'git rev-list --count*' => Process::result('2'),

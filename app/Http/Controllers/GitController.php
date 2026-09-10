@@ -21,6 +21,18 @@ class GitController extends Controller
     }
 
     /**
+     * The commit message for a pull request, falling back to the default.
+     */
+    private function commitMessage(): string
+    {
+        $validated = request()->validate([
+            'message' => ['nullable', 'string', 'max:200'],
+        ]);
+
+        return trim($validated['message'] ?? '') ?: 'Update packages';
+    }
+
+    /**
      * List all local branches for an installation.
      */
     public function branches(Installation $installation): JsonResponse
@@ -155,6 +167,32 @@ class GitController extends Controller
             ], 422);
         }
 
+        // Uncommitted work is not a commit yet, so it would never reach the pull
+        // request. Commit it first and let it count towards the comparison below.
+        $committed = false;
+
+        if ($repository->hasUncommittedChanges()) {
+            $stage = $repository->stageAll();
+
+            if (! $stage->successful()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Could not stage the changes. '.trim($stage->errorOutput().$stage->output()),
+                ], 422);
+            }
+
+            $commit = $repository->commit($this->commitMessage());
+
+            if (! $commit->successful()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => 'Could not commit the changes. '.trim($commit->errorOutput().$commit->output()),
+                ], 422);
+            }
+
+            $committed = true;
+        }
+
         // GitHub compares the pushed branches, so a stale remote-tracking ref
         // would let a branch look ahead of a default branch that already has its commits
         $repository->fetchRemoteBranch($defaultBranch);
@@ -188,7 +226,11 @@ class GitController extends Controller
         $result = $repository->createPullRequest($defaultBranch, $branch, $title);
 
         if ($result->successful()) {
-            return response()->json(['success' => true, 'pr_url' => trim($result->output())]);
+            return response()->json([
+                'success' => true,
+                'pr_url' => trim($result->output()),
+                'committed' => $committed,
+            ]);
         }
 
         $error = trim($result->errorOutput().$result->output());

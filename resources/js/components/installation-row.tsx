@@ -51,6 +51,10 @@ interface InstallationRowProps {
     onMeta: (installationId: number, meta: InstallationMeta) => void;
     onUpdate: (installation: Installation) => void;
     onPush: (installation: Installation) => void;
+    onCreatePr: (
+        installation: Installation,
+        submit: (commitMessage: string) => void,
+    ) => void;
 }
 
 /**
@@ -74,6 +78,7 @@ export default function InstallationRow({
     onMeta,
     onUpdate,
     onPush,
+    onCreatePr,
 }: InstallationRowProps) {
     const [showLog, setShowLog] = useState(false);
     const [metaLoading, setMetaLoading] = useState(meta === null);
@@ -160,12 +165,14 @@ export default function InstallationRow({
     const syncDisabled =
         isBusy || git.actionLoading || (info?.has_changes ?? false);
 
+    // Uncommitted changes are committed as part of opening the pull request, so
+    // they count as something to open one for just like commits already do
     const prBlockedReason = !isRepo
         ? 'Not a git repository'
         : info.is_main_branch
           ? `Already on ${info.default_branch}`
-          : !info.ahead_of_default
-            ? `No commits ahead of ${info.default_branch}`
+          : !info.ahead_of_default && !info.has_changes
+            ? `Nothing to open a pull request for on ${info.branch}`
             : null;
 
     const state = (() => {
@@ -472,7 +479,9 @@ export default function InstallationRow({
                             <SimpleTooltip
                                 content={
                                     prBlockedReason ??
-                                    `Create a pull request into ${info.default_branch}`
+                                    (info.has_changes
+                                        ? `Commit, push and open a pull request into ${info.default_branch}`
+                                        : `Create a pull request into ${info.default_branch}`)
                                 }
                             >
                                 <span className="inline-flex">
@@ -480,7 +489,14 @@ export default function InstallationRow({
                                         variant="outline"
                                         size="sm"
                                         className="h-7 px-2.5"
-                                        onClick={git.handleCreatePr}
+                                        onClick={() =>
+                                            info.has_changes
+                                                ? onCreatePr(
+                                                      installation,
+                                                      git.handleCreatePr,
+                                                  )
+                                                : git.handleCreatePr()
+                                        }
                                         disabled={
                                             isBusy ||
                                             git.actionLoading ||
