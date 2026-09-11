@@ -11,17 +11,19 @@ import {
     GitMerge,
     GitPullRequest,
     RefreshCw,
+    Trash2,
     Upload,
     X,
 } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState } from 'react';
+import DeleteBranchDialog from '@/components/delete-branch-dialog';
 import { Button } from '@/components/ui/button';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Input } from '@/components/ui/input';
 import SimpleTooltip from '@/components/ui/simple-tooltip';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useGitActions } from '@/hooks/use-git-actions';
-import type { InstallationMeta } from '@/types/git';
+import type { GitInfoData, InstallationMeta } from '@/types/git';
 import { show as fetchMeta } from '@/actions/App/Http/Controllers/AppInfoController';
 import {
     dismiss,
@@ -66,6 +68,52 @@ function shortLaravelVersion(version: string | undefined): string | null {
     }
 
     return version.split('.').slice(0, 2).join('.');
+}
+
+const PRIMARY_BRANCHES = ['main', 'master'];
+
+interface BranchOptionProps {
+    branch: string;
+    info: GitInfoData;
+    onSwitch: (branch: string) => void;
+    onDelete: (branch: string) => void;
+}
+
+/**
+ * A branch in the switcher, deletable unless it is checked out or a primary branch.
+ */
+function BranchOption({ branch, info, onSwitch, onDelete }: BranchOptionProps) {
+    const current = branch === info.branch;
+    const deletable =
+        !current &&
+        branch !== info.default_branch &&
+        !PRIMARY_BRANCHES.includes(branch);
+
+    return (
+        <div className="group flex items-center rounded-md transition-colors hover:bg-accent">
+            <button
+                onClick={() => onSwitch(branch)}
+                className={`min-w-0 flex-1 cursor-pointer px-2.5 py-1.5 text-left font-mono text-[11.5px] ${
+                    current
+                        ? 'font-medium text-foreground'
+                        : 'text-muted-foreground'
+                }`}
+            >
+                {branch}
+                {current && ' (current)'}
+            </button>
+
+            {deletable && (
+                <button
+                    onClick={() => onDelete(branch)}
+                    aria-label={`Delete ${branch}`}
+                    className="mr-1 inline-flex size-6 shrink-0 cursor-pointer items-center justify-center rounded text-muted-foreground/70 opacity-0 transition-[color,opacity] group-hover:opacity-100 hover:text-red-600 focus-visible:opacity-100 dark:hover:text-red-400"
+                >
+                    <Trash2 className="h-3.5 w-3.5" />
+                </button>
+            )}
+        </div>
+    );
 }
 
 export default function InstallationRow({
@@ -359,24 +407,37 @@ export default function InstallationRow({
                         </div>
                     )}
 
-                    {git.branchDropdownOpen && git.branchList && (
-                        <div className="absolute top-full left-0 z-50 mt-1 flex min-w-52 flex-col rounded-lg border bg-popover p-1 shadow-md">
+                    {isRepo && git.branchDropdownOpen && git.branchList && (
+                        <div className="absolute top-full left-0 z-50 mt-1 flex max-h-96 min-w-52 flex-col overflow-y-auto rounded-lg border bg-popover p-1 shadow-md">
                             {git.branchList.map((branch) => (
-                                <button
+                                <BranchOption
                                     key={branch}
-                                    onClick={() =>
-                                        git.handleSwitchBranch(branch)
-                                    }
-                                    className={`cursor-pointer rounded-md px-2.5 py-1.5 text-left font-mono text-[11.5px] transition-colors hover:bg-accent ${
-                                        branch === info?.branch
-                                            ? 'font-medium text-foreground'
-                                            : 'text-muted-foreground'
-                                    }`}
-                                >
-                                    {branch}
-                                    {branch === info?.branch && ' (current)'}
-                                </button>
+                                    branch={branch}
+                                    info={info}
+                                    onSwitch={git.handleSwitchBranch}
+                                    onDelete={git.handleDeleteBranchClick}
+                                />
                             ))}
+
+                            {git.remoteBranchList.length > 0 && (
+                                <>
+                                    <div className="my-1 h-px bg-border" />
+                                    <div className="px-2.5 pt-1 pb-0.5 font-mono text-[10px] font-semibold tracking-[0.14em] text-muted-foreground uppercase">
+                                        Only on origin
+                                    </div>
+                                    {git.remoteBranchList.map((branch) => (
+                                        <BranchOption
+                                            key={branch}
+                                            branch={branch}
+                                            info={info}
+                                            onSwitch={git.handleSwitchBranch}
+                                            onDelete={
+                                                git.handleDeleteBranchClick
+                                            }
+                                        />
+                                    ))}
+                                </>
+                            )}
 
                             {isRepo && info.is_main_branch && (
                                 <>
@@ -392,6 +453,14 @@ export default function InstallationRow({
                             )}
                         </div>
                     )}
+
+                    <DeleteBranchDialog
+                        branch={git.branchDeletion?.branch ?? null}
+                        preview={git.branchDeletion?.preview ?? null}
+                        deleting={git.actionLoading}
+                        onConfirm={git.confirmDeleteBranch}
+                        onCancel={git.cancelDeleteBranch}
+                    />
                 </div>
 
                 <div className="min-w-0">

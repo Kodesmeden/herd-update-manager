@@ -16,6 +16,7 @@ function fakeRepositoryOn(string $branch, string $defaultBranch = 'main', array 
         'gh repo view*' => Process::result($defaultBranch),
         'gh pr view*' => Process::result(output: '', exitCode: 1),
         'git status --porcelain*' => Process::result(''),
+        'git for-each-ref*' => Process::result(''),
         'git rev-parse --verify*' => Process::result('a1b2c3d'),
         'git rev-list --count*' => Process::result('0'),
         'git log --format=%s*' => Process::result('Update packages'),
@@ -438,28 +439,181 @@ it('ignores merge commits when counting how far a branch has drifted', function 
         && ! str_contains($process->command, '--no-merges'));
 });
 
-it('lists the local branches of the installation', function () {
+it('lists the local branches and the branches that only exist on origin', function () {
     Process::fake(fakeRepositoryOn('develop', overrides: [
         'git branch --format*' => Process::result("develop\nmain\nfeature/checkout\n"),
+        'git for-each-ref*' => Process::result(
+            "refs/remotes/origin/HEAD\nrefs/remotes/origin/develop\nrefs/remotes/origin/main\nrefs/remotes/origin/claude/old-session\n",
+        ),
     ]));
 
     $installation = Installation::factory()->create();
 
     $this->getJson(route('installations.git.branches', $installation))
         ->assertSuccessful()
-        ->assertExactJson(['branches' => ['develop', 'main', 'feature/checkout']]);
+        ->assertExactJson([
+            'branches' => ['develop', 'main', 'feature/checkout'],
+            'remote_branches' => ['claude/old-session'],
+        ]);
 });
 
-it('returns an empty branch list when git cannot read the repository', function () {
+it('returns empty branch lists when git cannot read the repository', function () {
     Process::fake(fakeRepositoryOn('develop', overrides: [
         'git branch --format*' => Process::result(output: '', exitCode: 128),
+        'git for-each-ref*' => Process::result(output: '', exitCode: 128),
     ]));
 
     $installation = Installation::factory()->create();
 
     $this->getJson(route('installations.git.branches', $installation))
         ->assertSuccessful()
-        ->assertExactJson(['branches' => []]);
+        ->assertExactJson(['branches' => [], 'remote_branches' => []]);
+});
+
+it('describes where a branch lives and what deleting it would lose', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result("develop\nmain\nbenchmark\n"),
+        'git for-each-ref*' => Process::result("refs/remotes/origin/main\nrefs/remotes/origin/benchmark\n"),
+        'git rev-list --count*' => Process::result('3'),
+        'gh pr view*' => Process::result(fakePullRequestJson('CLEAN')),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->getJson(route('installations.git.branch-deletion', ['installation' => $installation, 'branch' => 'benchmark']))
+        ->assertSuccessful()
+        ->assertExactJson([
+            'success' => true,
+            'branch' => 'benchmark',
+            'local' => true,
+            'remote' => true,
+            'unique_commits' => 3,
+            'pull_request_url' => 'https://github.com/acme/site/pull/7',
+        ]);
+
+    Process::assertRan('git fetch --all --prune');
+});
+
+it('counts lost commits against every other branch and tag but not the branch itself', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result("develop\nmain\nbenchmark\n"),
+        'git for-each-ref*' => Process::result("refs/remotes/origin/benchmark\n"),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->getJson(route('installations.git.branch-deletion', ['installation' => $installation, 'branch' => 'benchmark']))
+        ->assertSuccessful();
+
+    Process::assertRan("git rev-list --count --no-merges 'refs/heads/benchmark' 'refs/remotes/origin/benchmark' --not '--exclude=benchmark' --branches '--exclude=origin/benchmark' --remotes --tags");
+});
+
+it('refuses with 422 to preview deleting a branch that no longer exists', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result("develop\nmain\n"),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->getJson(route('installations.git.branch-deletion', ['installation' => $installation, 'branch' => 'benchmark']))
+        ->assertStatus(422)
+        ->assertJsonPath('success', false)
+        ->assertJsonPath('error', 'benchmark no longer exists.');
+});
+
+it('refuses with 422 to delete a branch that must be kept', function (string $branch, string $error) {
+    Process::fake(fakeRepositoryOn('develop', defaultBranch: 'trunk', overrides: [
+        'git branch --format*' => Process::result("develop\ntrunk\nmain\nmaster\n"),
+        'git branch -D*' => Process::result(''),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->deleteJson(route('installations.git.delete-branch', $installation), ['branch' => $branch])
+        ->assertStatus(422)
+        ->assertJsonPath('error', $error);
+
+    Process::assertDidntRun(fn ($process) => str_starts_with($process->command, 'git branch -D'));
+    Process::assertDidntRun(fn ($process) => str_starts_with($process->command, 'git push'));
+})->with([
+    'the checked out branch' => ['develop', 'develop is checked out. Switch to another branch before deleting it.'],
+    'the default branch' => ['trunk', 'trunk is a primary branch and cannot be deleted.'],
+    'main' => ['main', 'main is a primary branch and cannot be deleted.'],
+    'master' => ['master', 'master is a primary branch and cannot be deleted.'],
+]);
+
+it('deletes a branch locally and on origin', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result("develop\nmain\nbenchmark\n"),
+        'git for-each-ref*' => Process::result("refs/remotes/origin/main\nrefs/remotes/origin/benchmark\n"),
+        'git branch -D*' => Process::result('Deleted branch benchmark (was a1b2c3d).'),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->deleteJson(route('installations.git.delete-branch', $installation), ['branch' => 'benchmark'])
+        ->assertSuccessful()
+        ->assertExactJson(['success' => true, 'branch' => 'benchmark']);
+
+    Process::assertRan("git branch -D 'benchmark'");
+    Process::assertRan("git push origin --delete 'benchmark'");
+});
+
+it('deletes a branch that only exists on origin without touching local branches', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result("develop\nmain\n"),
+        'git for-each-ref*' => Process::result("refs/remotes/origin/main\nrefs/remotes/origin/claude/old-session\n"),
+        'git branch -D*' => Process::result(''),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->deleteJson(route('installations.git.delete-branch', $installation), ['branch' => 'claude/old-session'])
+        ->assertSuccessful();
+
+    Process::assertRan("git push origin --delete 'claude/old-session'");
+    Process::assertDidntRun(fn ($process) => str_starts_with($process->command, 'git branch -D'));
+});
+
+it('refuses with 422 and leaves origin untouched when the local branch cannot be deleted', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result("develop\nmain\nbenchmark\n"),
+        'git for-each-ref*' => Process::result("refs/remotes/origin/benchmark\n"),
+        'git branch -D*' => Process::result(
+            output: '',
+            errorOutput: "error: cannot delete branch 'benchmark' used by worktree at '/tmp/benchmark'\n",
+            exitCode: 1,
+        ),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->deleteJson(route('installations.git.delete-branch', $installation), ['branch' => 'benchmark'])
+        ->assertStatus(422)
+        ->assertJsonPath('success', false)
+        ->assertJsonPath('error', "error: cannot delete branch 'benchmark' used by worktree at '/tmp/benchmark'");
+
+    Process::assertDidntRun(fn ($process) => str_starts_with($process->command, 'git push'));
+});
+
+it('reports with 422 that origin kept the branch when deleting it there fails', function () {
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git branch --format*' => Process::result("develop\nmain\nbenchmark\n"),
+        'git for-each-ref*' => Process::result("refs/remotes/origin/benchmark\n"),
+        'git branch -D*' => Process::result('Deleted branch benchmark (was a1b2c3d).'),
+        'git push*' => Process::result(
+            output: '',
+            errorOutput: "remote: error: Cannot delete this protected branch\n",
+            exitCode: 1,
+        ),
+    ]));
+
+    $installation = Installation::factory()->create();
+
+    $this->deleteJson(route('installations.git.delete-branch', $installation), ['branch' => 'benchmark'])
+        ->assertStatus(422)
+        ->assertJsonPath('success', false)
+        ->assertJsonPath('error', 'Could not delete benchmark on origin. remote: error: Cannot delete this protected branch');
 });
 
 it('refuses with 422 to switch branch when no branch is given', function () {

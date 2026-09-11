@@ -30,3 +30,11 @@ export interface InstallationMeta {
     laravel_version: string;
     git: GitInfoData;
 }
+
+export interface BranchDeletionPreview {
+    branch: string;
+    local: boolean;
+    remote: boolean;
+    unique_commits: number;
+    pull_request_url: string | null;
+}

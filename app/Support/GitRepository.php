@@ -3,7 +3,9 @@
 namespace App\Support;
 
 use Illuminate\Contracts\Process\ProcessResult;
+use Illuminate\Process\Exceptions\ProcessFailedException;
 use Illuminate\Support\Facades\Process;
+use Illuminate\Support\Str;
 
 class GitRepository
 {
@@ -128,6 +130,28 @@ class GitRepository
     }
 
     /**
+     * List the branches on origin, without the remote prefix.
+     *
+     * @return array<int, string>
+     */
+    public function remoteBranches(): array
+    {
+        // Full ref names, because the short name of origin/HEAD is only "origin"
+        $result = $this->run('git for-each-ref --format="%(refname)" refs/remotes/origin');
+
+        if (! $result->successful()) {
+            return [];
+        }
+
+        $branches = array_map(
+            fn (string $ref): string => Str::after(trim($ref), 'refs/remotes/origin/'),
+            array_filter(explode("\n", trim($result->output()))),
+        );
+
+        return array_values(array_diff($branches, ['HEAD']));
+    }
+
+    /**
      * Count commits on the branch that are not yet on the default branch.
      *
      * Compares against origin/<default> when available, since the local
@@ -170,6 +194,32 @@ class GitRepository
         if (! $result->successful()) {
             return 0;
         }
+
+        return (int) trim($result->output());
+    }
+
+    /**
+     * Count the non-merge commits on a branch that no other branch or tag contains.
+     *
+     * Looks at both the local branch and its copy on origin, so unpushed work
+     * and work that only lives on origin both count. Fails loudly instead of
+     * returning zero, since zero would claim that nothing is lost.
+     *
+     * @throws ProcessFailedException
+     */
+    public function commitsOnlyOnBranch(string $branch, bool $local, bool $remote): int
+    {
+        $tips = array_filter([
+            $local ? 'refs/heads/'.$branch : null,
+            $remote ? 'refs/remotes/origin/'.$branch : null,
+        ]);
+
+        $result = $this->run(sprintf(
+            'git rev-list --count --no-merges %s --not %s --branches %s --remotes --tags',
+            implode(' ', array_map(escapeshellarg(...), $tips)),
+            escapeshellarg('--exclude='.$branch),
+            escapeshellarg('--exclude=origin/'.$branch),
+        ), timeout: 15)->throw();
 
         return (int) trim($result->output());
     }
@@ -344,6 +394,22 @@ class GitRepository
     public function createBranch(string $branch): ProcessResult
     {
         return $this->run(sprintf('git checkout -b %s', escapeshellarg($branch)), timeout: 15);
+    }
+
+    /**
+     * Delete a local branch, including commits that are not merged anywhere.
+     */
+    public function deleteLocalBranch(string $branch): ProcessResult
+    {
+        return $this->run(sprintf('git branch -D %s', escapeshellarg($branch)), timeout: 15);
+    }
+
+    /**
+     * Delete a branch on origin.
+     */
+    public function deleteRemoteBranch(string $branch): ProcessResult
+    {
+        return $this->run(sprintf('git push origin --delete %s', escapeshellarg($branch)), timeout: 60);
     }
 
     /**

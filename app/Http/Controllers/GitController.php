@@ -9,6 +9,13 @@ use Illuminate\Http\JsonResponse;
 class GitController extends Controller
 {
     /**
+     * Branch names that are never deleted, whatever the default branch is.
+     *
+     * @var array<int, string>
+     */
+    private const PRIMARY_BRANCHES = ['main', 'master'];
+
+    /**
      * The requested branch name, or null when none was given.
      */
     private function branchName(): ?string
@@ -33,12 +40,16 @@ class GitController extends Controller
     }
 
     /**
-     * List all local branches for an installation.
+     * List the local branches, and the branches that only exist on origin.
      */
     public function branches(Installation $installation): JsonResponse
     {
+        $repository = new GitRepository($installation->path);
+        $localBranches = $repository->branches();
+
         return response()->json([
-            'branches' => (new GitRepository($installation->path))->branches(),
+            'branches' => $localBranches,
+            'remote_branches' => array_values(array_diff($repository->remoteBranches(), $localBranches)),
         ]);
     }
 
@@ -93,6 +104,98 @@ class GitController extends Controller
             'success' => false,
             'error' => trim($result->errorOutput()),
         ], 422);
+    }
+
+    /**
+     * Describe what deleting a branch would remove, so it can be confirmed first.
+     */
+    public function previewBranchDeletion(Installation $installation): JsonResponse
+    {
+        $branch = $this->branchName();
+
+        if ($branch === null) {
+            return response()->json(['success' => false, 'error' => 'No branch specified'], 422);
+        }
+
+        $repository = new GitRepository($installation->path);
+
+        // Stale remote refs would misreport where the branch lives and what only it contains
+        $repository->fetchAllRemotes();
+
+        $local = in_array($branch, $repository->branches(), true);
+        $remote = in_array($branch, $repository->remoteBranches(), true);
+
+        if (! $local && ! $remote) {
+            return response()->json([
+                'success' => false,
+                'error' => "{$branch} no longer exists.",
+            ], 422);
+        }
+
+        return response()->json([
+            'success' => true,
+            'branch' => $branch,
+            'local' => $local,
+            'remote' => $remote,
+            'unique_commits' => $repository->commitsOnlyOnBranch($branch, $local, $remote),
+            'pull_request_url' => $repository->pullRequestStatus($branch)['url'] ?? null,
+        ]);
+    }
+
+    /**
+     * Delete a branch locally and on origin.
+     *
+     * The local branch goes first. Git refuses to delete a branch that is checked
+     * out in another worktree, and stopping there leaves both copies untouched.
+     * A copy left behind on origin still shows up in the branch list.
+     */
+    public function deleteBranch(Installation $installation): JsonResponse
+    {
+        $branch = $this->branchName();
+
+        if ($branch === null) {
+            return response()->json(['success' => false, 'error' => 'No branch specified'], 422);
+        }
+
+        $repository = new GitRepository($installation->path);
+
+        if ($branch === $repository->currentBranch()) {
+            return response()->json([
+                'success' => false,
+                'error' => "{$branch} is checked out. Switch to another branch before deleting it.",
+            ], 422);
+        }
+
+        if (in_array($branch, self::PRIMARY_BRANCHES, true) || $branch === $repository->defaultBranch()) {
+            return response()->json([
+                'success' => false,
+                'error' => "{$branch} is a primary branch and cannot be deleted.",
+            ], 422);
+        }
+
+        if (in_array($branch, $repository->branches(), true)) {
+            $localDeletion = $repository->deleteLocalBranch($branch);
+
+            if (! $localDeletion->successful()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => trim($localDeletion->errorOutput()),
+                ], 422);
+            }
+        }
+
+        if (in_array($branch, $repository->remoteBranches(), true)) {
+            $remoteDeletion = $repository->deleteRemoteBranch($branch);
+
+            if (! $remoteDeletion->successful()) {
+                return response()->json([
+                    'success' => false,
+                    'error' => "Could not delete {$branch} on origin. ".trim($remoteDeletion->errorOutput()),
+                ], 422);
+            }
+        }
+
+        return response()->json(['success' => true, 'branch' => $branch]);
     }
 
     /**

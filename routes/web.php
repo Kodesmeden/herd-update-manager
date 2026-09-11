@@ -19,6 +19,8 @@ Route::post('/installations/fetch-all', [InstallationController::class, 'fetchAl
 Route::get('/installations/{installation}/git/branches', [GitController::class, 'branches'])->name('installations.git.branches');
 Route::post('/installations/{installation}/git/switch', [GitController::class, 'switchBranch'])->name('installations.git.switch');
 Route::post('/installations/{installation}/git/branch', [GitController::class, 'createBranch'])->name('installations.git.branch');
+Route::get('/installations/{installation}/git/branch-deletion', [GitController::class, 'previewBranchDeletion'])->name('installations.git.branch-deletion');
+Route::delete('/installations/{installation}/git/branch', [GitController::class, 'deleteBranch'])->name('installations.git.delete-branch');
 Route::post('/installations/{installation}/git/sync', [GitController::class, 'syncWithDefault'])->name('installations.git.sync');
 Route::post('/installations/{installation}/git/pr', [GitController::class, 'createPr'])->name('installations.git.pr');
 Route::get('/installations/{installation}/git/pr-status', [GitController::class, 'prStatus'])->name('installations.git.pr-status');

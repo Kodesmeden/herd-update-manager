@@ -1,12 +1,18 @@
 import { useEffect, useState } from 'react';
 import type { RefObject } from 'react';
 import { getCsrfToken } from '@/lib/utils';
-import type { GitInfoData, PullRequestStatus } from '@/types/git';
+import type {
+    BranchDeletionPreview,
+    GitInfoData,
+    PullRequestStatus,
+} from '@/types/git';
 import {
     branches as fetchBranches,
     createBranch,
     createPr,
+    deleteBranch,
     mergePr,
+    previewBranchDeletion,
     prStatus as fetchPrStatus,
     switchBranch,
     syncWithDefault,
@@ -21,6 +27,12 @@ export interface GitActionMessage {
     url?: string;
 }
 
+interface PendingBranchDeletion {
+    branch: string;
+    // null while the server is still checking what the deletion would remove
+    preview: BranchDeletionPreview | null;
+}
+
 interface UseGitActionsOptions {
     installationId: number;
     info: GitInfoData | null;
@@ -30,8 +42,8 @@ interface UseGitActionsOptions {
 }
 
 /**
- * Git state and actions for a single installation: branch switching, syncing
- * with the default branch and pull request handling.
+ * Git state and actions for a single installation: switching and deleting
+ * branches, syncing with the default branch and pull request handling.
  */
 export function useGitActions({
     installationId,
@@ -47,9 +59,12 @@ export function useGitActions({
         PullRequestStatus | null | undefined
     >(undefined);
     const [branchList, setBranchList] = useState<string[] | null>(null);
+    const [remoteBranchList, setRemoteBranchList] = useState<string[]>([]);
     const [branchDropdownOpen, setBranchDropdownOpen] = useState(false);
     const [showBranchInput, setShowBranchInput] = useState(false);
     const [newBranchName, setNewBranchName] = useState('');
+    const [branchDeletion, setBranchDeletion] =
+        useState<PendingBranchDeletion | null>(null);
 
     const pullRequest =
         polledPullRequest !== undefined
@@ -104,6 +119,16 @@ export function useGitActions({
         return () => document.removeEventListener('mousedown', handler);
     }, [branchDropdownOpen, dropdownRef]);
 
+    const loadBranches = async (): Promise<string[]> => {
+        const res = await fetch(fetchBranches.url(installationId));
+        const data = await res.json();
+        const branches: string[] = data.branches || [];
+        setBranchList(branches);
+        setRemoteBranchList(data.remote_branches || []);
+
+        return branches;
+    };
+
     const handleBranchClick = async () => {
         if (info?.has_changes) {
             setMessage({
@@ -121,9 +146,7 @@ export function useGitActions({
         }
 
         if (!branchList) {
-            const res = await fetch(fetchBranches.url(installationId));
-            const data = await res.json();
-            setBranchList(data.branches || []);
+            await loadBranches();
         }
 
         setBranchDropdownOpen(true);
@@ -155,6 +178,8 @@ export function useGitActions({
                     type: 'success',
                     text: `Switched to "${data.branch}"`,
                 });
+                // Checking out a branch that only exists on origin creates a local copy
+                setBranchList(null);
                 onRefresh();
             } else {
                 setMessage({
@@ -173,10 +198,7 @@ export function useGitActions({
         setBranchDropdownOpen(false);
 
         if (!branchList) {
-            const res = await fetch(fetchBranches.url(installationId));
-            const data = await res.json();
-            setBranchList(data.branches || []);
-            const branches: string[] = data.branches || [];
+            const branches = await loadBranches();
             setNewBranchName(
                 branches.includes('develop')
                     ? `updates/${new Date().toISOString().slice(0, 10)}`
@@ -239,6 +261,85 @@ export function useGitActions({
             setMessage({ type: 'error', text: 'Request failed' });
         }
 
+        setActionLoading(false);
+    };
+
+    const handleDeleteBranchClick = async (branch: string) => {
+        setBranchDropdownOpen(false);
+        setMessage(null);
+        setBranchDeletion({ branch, preview: null });
+
+        try {
+            const res = await fetch(
+                previewBranchDeletion.url(installationId, {
+                    query: { branch },
+                }),
+            );
+            const data = await res.json();
+
+            if (data.success) {
+                // Leave the dialog closed if it was cancelled while checking
+                setBranchDeletion((pending) =>
+                    pending?.branch === branch
+                        ? { branch, preview: data }
+                        : pending,
+                );
+            } else {
+                setBranchDeletion(null);
+                setMessage({
+                    type: 'error',
+                    text: data.error || 'Failed to check branch',
+                });
+            }
+        } catch {
+            setBranchDeletion(null);
+            setMessage({ type: 'error', text: 'Request failed' });
+        }
+    };
+
+    const cancelDeleteBranch = () => {
+        setBranchDeletion(null);
+    };
+
+    const confirmDeleteBranch = async () => {
+        if (!branchDeletion) {
+            return;
+        }
+
+        const { branch } = branchDeletion;
+
+        setActionLoading(true);
+        setMessage(null);
+
+        try {
+            const res = await fetch(deleteBranch.url(installationId), {
+                method: 'DELETE',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-XSRF-TOKEN': getCsrfToken(),
+                },
+                body: JSON.stringify({ branch }),
+            });
+            const data = await res.json();
+
+            if (data.success) {
+                setMessage({
+                    type: 'success',
+                    text: `Deleted "${branch}"`,
+                });
+            } else {
+                setMessage({
+                    type: 'error',
+                    text: data.error || 'Failed to delete branch',
+                });
+            }
+        } catch {
+            setMessage({ type: 'error', text: 'Request failed' });
+        }
+
+        // A failure on origin can still have removed the local copy
+        setBranchList(null);
+        setBranchDeletion(null);
         setActionLoading(false);
     };
 
@@ -366,15 +467,20 @@ export function useGitActions({
         message,
         pullRequest,
         branchList,
+        remoteBranchList,
         branchDropdownOpen,
         showBranchInput,
         newBranchName,
+        branchDeletion,
         setNewBranchName,
         handleBranchClick,
         handleSwitchBranch,
         handleNewBranchClick,
         cancelNewBranch,
         handleCreateBranch,
+        handleDeleteBranchClick,
+        cancelDeleteBranch,
+        confirmDeleteBranch,
         handleSyncWithDefault,
         handleCreatePr,
         handleMergePr,
