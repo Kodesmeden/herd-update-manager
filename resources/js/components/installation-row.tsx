@@ -139,7 +139,7 @@ export default function InstallationRow({
     const branchInputRef = useRef<HTMLInputElement>(null);
 
     const loadMeta = useCallback(() => {
-        fetch(fetchMeta.url(installation.id))
+        return fetch(fetchMeta.url(installation.id))
             .then((res) => res.json())
             .then((data: InstallationMeta) => {
                 onMeta(installation.id, data);

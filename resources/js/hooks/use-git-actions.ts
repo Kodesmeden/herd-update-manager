@@ -36,7 +36,7 @@ interface PendingBranchDeletion {
 interface UseGitActionsOptions {
     installationId: number;
     info: GitInfoData | null;
-    onRefresh: () => void;
+    onRefresh: () => Promise<void>;
     dropdownRef: RefObject<HTMLDivElement | null>;
     branchInputRef: RefObject<HTMLInputElement | null>;
 }
@@ -407,7 +407,9 @@ export function useGitActions({
                     url: data.pr_url,
                 });
                 setPolledPullRequest(undefined);
-                onRefresh();
+                // Stay busy until the refreshed state shows the new pull request,
+                // so Create PR cannot be clicked twice in the meantime
+                await onRefresh();
             } else {
                 setMessage({
                     type: 'error',
