@@ -1,5 +1,6 @@
 <?php
 
+use App\Ai\Agents\CommitMessageAgent;
 use App\Models\Installation;
 use Illuminate\Support\Facades\Process;
 
@@ -119,7 +120,29 @@ it('falls back to the default commit message when none is given', function () {
 
     $this->postJson(route('installations.git.pr', $installation))->assertSuccessful();
 
-    Process::assertRan(fn ($process) => $process->command === "git commit -m 'Update packages'");
+    Process::assertRan(fn ($process) => $process->command === "git commit -m 'Update'");
+});
+
+it('commits with the message Claude writes when asked', function () {
+    config(['ai.providers.anthropic.key' => 'test-key']);
+    Process::fake(fakeRepositoryOn('develop', overrides: [
+        'git status --porcelain*' => Process::result(' M routes/web.php'),
+        'git rev-list --count*' => Process::result('1'),
+        'git add --all*' => Process::result(''),
+        'git diff --cached --stat*' => Process::result(' routes/web.php | 1 +'),
+        'git diff --cached --no-color*' => Process::result('+Route::get(...)'),
+        'git commit*' => Process::result('1 file changed'),
+        'gh pr create*' => Process::result('https://github.com/acme/site/pull/7'),
+    ]));
+    CommitMessageAgent::fake(['Add the settings route']);
+
+    $installation = Installation::factory()->create();
+
+    $this->postJson(route('installations.git.pr', $installation), ['generate_message' => true])
+        ->assertSuccessful()
+        ->assertJsonPath('committed', true);
+
+    Process::assertRan(fn ($process) => $process->command === "git commit -m 'Add the settings route'");
 });
 
 it('does not commit when the work tree is clean', function () {

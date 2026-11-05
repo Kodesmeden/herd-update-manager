@@ -184,6 +184,28 @@ it('escapes the commit message before handing it to the shell', function () {
         ->toBe("app:push-installation --message='it'\\''s a '\\''quoted'\\'' one'");
 });
 
+it('asks the push command to let Claude write the message, with Update as fallback', function () {
+    $installation = Installation::factory()->create();
+
+    $this->post(route('installations.push', $installation), ['generate_message' => true])
+        ->assertRedirect();
+
+    expect($this->backgroundCommands()[0]['command'])
+        ->toBe("app:push-installation --message='Update' --generate-message");
+});
+
+it('tells the page whether Claude can write commit messages', function (?string $key, bool $enabled) {
+    config(['ai.providers.anthropic.key' => $key]);
+    fakeSyncFor();
+
+    $this->get(route('home'))
+        ->assertSuccessful()
+        ->assertInertia(fn ($page) => $page->where('claudeEnabled', $enabled));
+})->with([
+    'with an API key' => ['test-key', true],
+    'without an API key' => [null, false],
+]);
+
 it('sets all visible installations to running on update all', function () {
     $visible = Installation::factory()->count(3)->create();
     $hidden = Installation::factory()->hidden()->create();

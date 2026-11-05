@@ -2,13 +2,14 @@
 
 namespace App\Console\Commands;
 
+use App\Ai\Agents\CommitMessageAgent;
 use App\Models\Installation;
 use App\Support\GitRepository;
 use Illuminate\Console\Attributes\Description;
 use Illuminate\Console\Attributes\Signature;
 use Illuminate\Console\Command;
 
-#[Signature('app:push-installation {id} {--message=Update packages}')]
+#[Signature('app:push-installation {id} {--message=Update} {--generate-message : Let Claude write the message, falling back to --message}')]
 #[Description('Commit and push changes for a Herd installation')]
 class PushInstallation extends Command
 {
@@ -38,7 +39,7 @@ class PushInstallation extends Command
 
         // Check if there is anything to commit
         if ($repository->hasUncommittedChanges()) {
-            $commitResult = $repository->commit($this->option('message'));
+            $commitResult = $repository->commit($this->commitMessage($installation, $repository));
             $output .= $commitResult->output().$commitResult->errorOutput();
 
             if (! $commitResult->successful()) {
@@ -79,6 +80,26 @@ class PushInstallation extends Command
         }
 
         return $this->markSucceeded($installation, $output);
+    }
+
+    /**
+     * The message for the commit, written by Claude when asked and possible.
+     */
+    private function commitMessage(Installation $installation, GitRepository $repository): string
+    {
+        if ($this->option('generate-message')) {
+            $installation->update(['current_step' => 'Writing commit message']);
+
+            $generated = (new CommitMessageAgent)->describe($repository);
+
+            $installation->update(['current_step' => 'Git add & commit']);
+
+            if ($generated !== null) {
+                return $generated;
+            }
+        }
+
+        return $this->option('message');
     }
 
     /**

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Ai\Agents\CommitMessageAgent;
 use App\Models\Installation;
 use App\Support\BackgroundCommand;
 use App\Support\GitRepository;
@@ -41,6 +42,7 @@ class InstallationController extends Controller
             'showHidden' => $showHidden,
             'hiddenCount' => Installation::query()->where('hidden', true)->count(),
             'herdPath' => $this->herdPathForDisplay(),
+            'claudeEnabled' => CommitMessageAgent::isConfigured(),
         ]);
     }
 
@@ -151,9 +153,9 @@ class InstallationController extends Controller
      */
     public function push(Installation $installation): RedirectResponse
     {
-        $message = $this->commitMessage();
+        $command = $this->pushCommand();
         $installation->update(['status' => 'pushing', 'progress' => 0, 'current_step' => null, 'output' => null]);
-        $this->startBackgroundCommand($installation, 'app:push-installation --message='.escapeshellarg($message));
+        $this->startBackgroundCommand($installation, $command);
 
         return back();
     }
@@ -163,7 +165,7 @@ class InstallationController extends Controller
      */
     public function pushAll(): RedirectResponse
     {
-        $message = $this->commitMessage();
+        $command = $this->pushCommand();
 
         $installations = Installation::query()
             ->where('hidden', false)
@@ -171,10 +173,7 @@ class InstallationController extends Controller
 
         foreach ($installations as $installation) {
             $installation->update(['status' => 'pushing', 'progress' => 0, 'current_step' => null, 'output' => null]);
-            $this->startBackgroundCommand(
-                $installation,
-                'app:push-installation --message='.escapeshellarg($message),
-            );
+            $this->startBackgroundCommand($installation, $command);
         }
 
         return back();
@@ -198,15 +197,19 @@ class InstallationController extends Controller
     }
 
     /**
-     * The commit message for a push request, falling back to the default.
+     * The push command for a push request, with the commit message falling back to the default.
      */
-    private function commitMessage(): string
+    private function pushCommand(): string
     {
         $validated = request()->validate([
             'message' => ['nullable', 'string', 'max:200'],
+            'generate_message' => ['boolean'],
         ]);
 
-        return trim($validated['message'] ?? '') ?: 'Update packages';
+        $message = trim($validated['message'] ?? '') ?: 'Update';
+        $command = 'app:push-installation --message='.escapeshellarg($message);
+
+        return ($validated['generate_message'] ?? false) ? $command.' --generate-message' : $command;
     }
 
     /**

@@ -23,6 +23,13 @@ class GitRepository
         'unstable' => 'Some checks are failing',
     ];
 
+    /**
+     * Dependency lock files, whose diffs are long and say little about the change.
+     *
+     * @var array<int, string>
+     */
+    private const LOCK_FILES = ['composer.lock', 'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml', 'bun.lock'];
+
     /** @var array<string, string|false> */
     private readonly array $env;
 
@@ -335,6 +342,30 @@ class GitRepository
     public function stageAll(): ProcessResult
     {
         return $this->run('git add --all', timeout: 30);
+    }
+
+    /**
+     * List the staged files with their added and removed line counts.
+     */
+    public function stagedDiffStat(): string
+    {
+        return trim($this->run('git diff --cached --stat --no-color', timeout: 15)->output());
+    }
+
+    /**
+     * Get the staged diff, leaving out lock files that only repeat what the stat already says.
+     */
+    public function stagedDiffWithoutLockFiles(): string
+    {
+        $excludes = array_map(
+            fn (string $lockFile): string => escapeshellarg(':(exclude,glob)**/'.$lockFile),
+            self::LOCK_FILES,
+        );
+
+        return trim($this->run(
+            'git diff --cached --no-color --no-ext-diff -- . '.implode(' ', $excludes),
+            timeout: 15,
+        )->output());
     }
 
     /**

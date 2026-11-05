@@ -32,6 +32,7 @@ interface Props {
     showHidden: boolean;
     hiddenCount: number;
     herdPath: string;
+    claudeEnabled: boolean;
 }
 
 type PushDialog =
@@ -41,10 +42,13 @@ type PushDialog =
     | {
           kind: 'pr';
           installation: Installation;
-          submit: (commitMessage: string) => void;
+          submit: (
+              commitMessage: string | null,
+              generateMessage: boolean,
+          ) => void;
       };
 
-const DEFAULT_COMMIT_MESSAGE = 'Update packages';
+const DEFAULT_COMMIT_MESSAGE = 'Update';
 
 const COLUMNS =
     'grid grid-cols-[24px_minmax(210px,1.6fr)_56px_minmax(150px,1.2fr)_116px_minmax(140px,1.8fr)_332px] items-center gap-x-3';
@@ -62,6 +66,7 @@ export default function Welcome({
     showHidden,
     hiddenCount,
     herdPath,
+    claudeEnabled,
 }: Props) {
     const [metaMap, setMetaMap] = useState<Record<number, InstallationMeta>>(
         {},
@@ -71,6 +76,8 @@ export default function Welcome({
     const [selected, setSelected] = useState<number[]>([]);
     const [pushDialog, setPushDialog] = useState<PushDialog | null>(null);
     const [commitMessage, setCommitMessage] = useState(DEFAULT_COMMIT_MESSAGE);
+    const [claudeWritesMessage, setClaudeWritesMessage] = useState(true);
+    const generateMessage = claudeEnabled && claudeWritesMessage;
     const [fetching, setFetching] = useState(false);
     const [lastFetch, setLastFetch] = useState<string | null>(null);
 
@@ -213,7 +220,7 @@ export default function Welcome({
     async function postForEach(
         ids: number[],
         url: (id: number) => string,
-        body?: Record<string, string>,
+        body?: Record<string, string | boolean | null>,
     ) {
         for (const id of ids) {
             try {
@@ -267,25 +274,27 @@ export default function Welcome({
         setPushDialog(dialog);
     }
 
-    function handleConfirmPush() {
-        const message = commitMessage.trim();
+    const canConfirmPush = generateMessage || commitMessage.trim() !== '';
 
-        if (!pushDialog || !message) {
+    function handleConfirmPush() {
+        if (!pushDialog || !canConfirmPush) {
             return;
         }
 
+        // Left empty, the server falls back to the default if Claude cannot write a message
+        const message = generateMessage ? null : commitMessage.trim();
+        const data = { message, generate_message: generateMessage };
+
         if (pushDialog.kind === 'pr') {
-            pushDialog.submit(message);
+            pushDialog.submit(message, generateMessage);
         } else if (pushDialog.kind === 'one') {
-            router.post(
-                push.url(pushDialog.installation.id),
-                { message },
-                { preserveScroll: true },
-            );
+            router.post(push.url(pushDialog.installation.id), data, {
+                preserveScroll: true,
+            });
         } else if (pushDialog.kind === 'all') {
-            router.post(pushAll.url(), { message }, { preserveScroll: true });
+            router.post(pushAll.url(), data, { preserveScroll: true });
         } else {
-            postForEach(pushDialog.ids, (id) => push.url(id), { message });
+            postForEach(pushDialog.ids, (id) => push.url(id), data);
         }
 
         setPushDialog(null);
@@ -506,16 +515,36 @@ export default function Welcome({
                     </DialogHeader>
                     <Input
                         aria-label="Commit message"
-                        placeholder="Commit message..."
-                        value={commitMessage}
+                        placeholder={
+                            generateMessage
+                                ? 'Claude writes a message from the changes'
+                                : 'Commit message...'
+                        }
+                        value={generateMessage ? '' : commitMessage}
+                        disabled={generateMessage}
                         onChange={(e) => setCommitMessage(e.target.value)}
                         onKeyDown={(e) => {
-                            if (e.key === 'Enter' && commitMessage.trim()) {
+                            if (e.key === 'Enter') {
                                 handleConfirmPush();
                             }
                         }}
                         autoFocus
                     />
+                    {claudeEnabled && (
+                        <label className="flex cursor-pointer items-center gap-2 text-[13px] text-muted-foreground">
+                            <Checkbox
+                                checked={claudeWritesMessage}
+                                onCheckedChange={(checked) =>
+                                    setClaudeWritesMessage(checked === true)
+                                }
+                            />
+                            Let Claude write the commit message
+                            {pushDialog?.kind === 'all' ||
+                            pushDialog?.kind === 'selected'
+                                ? ' for each site'
+                                : ''}
+                        </label>
+                    )}
                     <DialogFooter>
                         <Button
                             variant="outline"
@@ -525,7 +554,8 @@ export default function Welcome({
                         </Button>
                         <Button
                             onClick={handleConfirmPush}
-                            disabled={!commitMessage.trim()}
+                            disabled={!canConfirmPush}
+                            autoFocus={generateMessage}
                         >
                             {pushDialog?.kind === 'pr' ? 'Create PR' : 'Push'}
                         </Button>

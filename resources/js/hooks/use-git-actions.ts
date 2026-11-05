@@ -377,7 +377,10 @@ export function useGitActions({
         setActionLoading(false);
     };
 
-    const handleCreatePr = async (commitMessage?: string) => {
+    const handleCreatePr = async (
+        commitMessage?: string | null,
+        generateMessage = false,
+    ) => {
         setActionLoading(true);
         setMessage(null);
 
@@ -388,7 +391,10 @@ export function useGitActions({
                     'Content-Type': 'application/json',
                     'X-XSRF-TOKEN': getCsrfToken(),
                 },
-                body: JSON.stringify({ message: commitMessage ?? null }),
+                body: JSON.stringify({
+                    message: commitMessage ?? null,
+                    generate_message: generateMessage,
+                }),
             });
             const data = await res.json();
 

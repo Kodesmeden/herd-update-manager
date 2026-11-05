@@ -55,7 +55,10 @@ interface InstallationRowProps {
     onPush: (installation: Installation) => void;
     onCreatePr: (
         installation: Installation,
-        submit: (commitMessage: string) => void,
+        submit: (
+            commitMessage: string | null,
+            generateMessage: boolean,
+        ) => void,
     ) => void;
 }
 

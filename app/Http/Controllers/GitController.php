@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Ai\Agents\CommitMessageAgent;
 use App\Models\Installation;
 use App\Support\GitRepository;
 use Illuminate\Http\JsonResponse;
@@ -28,15 +29,20 @@ class GitController extends Controller
     }
 
     /**
-     * The commit message for a pull request, falling back to the default.
+     * The commit message for a pull request, written by Claude when asked and possible, falling back to the default.
      */
-    private function commitMessage(): string
+    private function commitMessage(GitRepository $repository): string
     {
         $validated = request()->validate([
             'message' => ['nullable', 'string', 'max:200'],
+            'generate_message' => ['boolean'],
         ]);
 
-        return trim($validated['message'] ?? '') ?: 'Update packages';
+        $generated = ($validated['generate_message'] ?? false)
+            ? (new CommitMessageAgent)->describe($repository)
+            : null;
+
+        return $generated ?? (trim($validated['message'] ?? '') ?: 'Update');
     }
 
     /**
@@ -284,7 +290,7 @@ class GitController extends Controller
                 ], 422);
             }
 
-            $commit = $repository->commit($this->commitMessage());
+            $commit = $repository->commit($this->commitMessage($repository));
 
             if (! $commit->successful()) {
                 return response()->json([
